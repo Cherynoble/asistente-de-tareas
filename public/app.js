@@ -198,14 +198,12 @@ function renderInbox() {
         <div class="meta">${who ? `<span>cliente: ${esc(who)}</span>` : ''}</div>
         <div class="actions">
           <button class="approve j-approve">✓ Aprobar</button>
-          <button class="dismiss j-dismiss">✕ Descartar</button>
           <button class="dismiss j-del" title="Eliminar">🗑</button>
         </div>
       </div>
     </div>`);
     inboxSel.bind(card.querySelector('.sel'), String(t.id));
     card.querySelector('.j-approve').onclick = () => setStatus(t.id, 'todo');
-    card.querySelector('.j-dismiss').onclick = () => setStatus(t.id, 'dismissed');
     card.querySelector('.j-del').onclick = () => deleteTask(t.id);
     list.append(card);
   }
@@ -217,7 +215,6 @@ async function deleteTask(id) {
 }
 $('#inbox-search').addEventListener('input', renderInbox);
 $('#inbox-bulk-approve').onclick = () => bulkTasks(inboxSel, 'status', 'todo');
-$('#inbox-bulk-dismiss').onclick = () => bulkTasks(inboxSel, 'status', 'dismissed');
 $('#inbox-bulk-delete').onclick = () => bulkTasks(inboxSel, 'delete');
 
 async function setStatus(id, status) {
@@ -609,8 +606,9 @@ $('#trash-empty').onclick = async () => {
 let currentThreadId = null;
 let chatInited = false;
 
-function bubble(role, text) {
-  return el(`<div class="bubble ${role === 'user' ? 'user' : 'bot'}">${esc(text)}</div>`);
+function bubble(role, text, attachments) {
+  const atts = (attachments || []).map((a) => `<span class="att">📎 ${esc(a.name)}</span>`).join('');
+  return el(`<div class="bubble ${role === 'user' ? 'user' : 'bot'}">${atts}${esc(text)}</div>`);
 }
 
 async function loadThreads() {
@@ -640,7 +638,7 @@ async function openThread(id) {
   const msgs = await (await fetch(`/api/threads/${id}`)).json();
   const log = $('#chat-log');
   log.innerHTML = '';
-  for (const m of msgs) log.append(bubble(m.role, m.content));
+  for (const m of msgs) log.append(bubble(m.role, m.content, m.attachments));
   log.scrollTop = log.scrollHeight;
   await loadThreads();
 }
@@ -657,6 +655,7 @@ function newThread() {
 
 function showChatView() {
   $('#memory-panel').hidden = true;
+  $('#reminders-panel').hidden = true;
   $('#chat-log').style.display = '';
   $('#chat-form').style.display = '';
 }
@@ -664,7 +663,7 @@ function showChatView() {
 async function initChat() {
   if (chatInited) return;
   chatInited = true;
-  await Promise.all([loadThreads(), loadMemory()]);
+  await Promise.all([loadThreads(), loadMemory(), loadReminders()]);
   const threads = await (await fetch('/api/threads')).json();
   if (threads.length) openThread(threads[0].id);
   else newThread();
@@ -672,34 +671,78 @@ async function initChat() {
 
 $('#new-thread').onclick = newThread;
 
+// ---- Chat file attachment ----
+let selectedFile = null;
+function clearFile() {
+  selectedFile = null;
+  $('#chat-file').value = '';
+  const chip = $('#chat-file-chip');
+  chip.hidden = true;
+  chip.innerHTML = '';
+}
+$('#chat-file').addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if (!f) return clearFile();
+  selectedFile = f;
+  const chip = $('#chat-file-chip');
+  chip.hidden = false;
+  chip.innerHTML = `📎 ${esc(f.name)} <button title="quitar">✕</button>`;
+  chip.querySelector('button').onclick = clearFile;
+});
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1]);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
 $('#chat-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const input = $('#chat-input');
   const text = input.value.trim();
-  if (!text) return;
+  const file = selectedFile;
+  if (!text && !file) return;
   input.value = '';
   showChatView();
   const log = $('#chat-log');
   if (log.querySelector('.empty')) log.innerHTML = '';
-  log.append(bubble('user', text));
-  const thinking = el('<div class="bubble bot thinking">pensando…</div>');
+  log.append(bubble('user', text, file ? [{ name: file.name }] : []));
+  const thinking = el(`<div class="bubble bot thinking">${file ? 'analizando archivo…' : 'pensando…'}</div>`);
   log.append(thinking);
   log.scrollTop = log.scrollHeight;
   try {
-    const r = await (
-      await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ threadId: currentThreadId, message: text }),
-      })
-    ).json();
+    let r;
+    if (file) {
+      const dataBase64 = await fileToBase64(file);
+      clearFile();
+      r = await (
+        await fetch('/api/chat/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            threadId: currentThreadId,
+            message: text,
+            fileName: file.name,
+            mimeType: file.type,
+            dataBase64,
+          }),
+        })
+      ).json();
+    } else {
+      r = await (
+        await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ threadId: currentThreadId, message: text }),
+        })
+      ).json();
+    }
     thinking.remove();
     if (r.threadId) currentThreadId = r.threadId;
     log.append(bubble('bot', r.reply || `(error: ${r.error || 'sin respuesta'})`));
-    if (r.usedTools && r.usedTools.includes('save_memory')) {
-      log.append(el('<div class="empty" style="padding:6px">🧠 guardé algo en la memoria</div>'));
-      loadMemory();
-    }
+    handleChatTools(r, log);
     if (r.createdThread) await loadThreads();
   } catch (err) {
     thinking.remove();
@@ -707,6 +750,83 @@ $('#chat-form').addEventListener('submit', async (e) => {
   }
   log.scrollTop = log.scrollHeight;
 });
+
+function handleChatTools(r, log) {
+  const note = (t) => log.append(el(`<div class="empty" style="padding:6px">${t}</div>`));
+  const used = r.usedTools || [];
+  if (used.includes('save_memory')) { note('🧠 guardé algo en la memoria'); loadMemory(); }
+  if (used.includes('create_task')) {
+    note('✅ creé una tarea en «Por hacer»');
+    loadInbox();
+    loadTasks();
+    loadStats();
+  }
+  if (used.includes('schedule_reminder')) { note('⏰ programé un recordatorio'); loadReminders(); }
+}
+
+// ---- Scheduled reminders (chat subtab) ----
+async function loadReminders() {
+  const rs = await (await fetch('/api/agenda')).json();
+  $('#reminders-count').textContent = rs.length;
+  const list = $('#reminders-list');
+  list.innerHTML = '';
+  if (!rs.length) {
+    list.append(el('<div class="empty">No hay recordatorios. Pídele al asistente «recuérdame mañana…».</div>'));
+    return;
+  }
+  for (const r of rs) {
+    const overdue = r.dueAt < Date.now();
+    const when = new Date(r.dueAt).toLocaleString('es');
+    const card = el(`<div class="card mem-item">
+      <span class="mc"><b>${esc(r.text)}</b><br><span class="muted" style="font-size:12px">${overdue ? '⚠️ ' : ''}${esc(when)}</span></span>
+      <button class="dismiss" title="Cancelar">🗑</button>
+    </div>`);
+    card.querySelector('.dismiss').onclick = async () => {
+      await fetch(`/api/agenda/${r.id}`, { method: 'DELETE' });
+      await loadReminders();
+    };
+    list.append(card);
+  }
+}
+$('#show-reminders').onclick = () => {
+  $('#chat-log').style.display = 'none';
+  $('#chat-form').style.display = 'none';
+  $('#memory-panel').hidden = true;
+  $('#reminders-panel').hidden = false;
+  loadReminders();
+};
+$('#close-reminders').onclick = showChatView;
+
+// ---- Launch digest ("Buenos días") ----
+async function checkDigest() {
+  try {
+    const d = await (await fetch('/api/digest')).json();
+    if (!d.newTasks.length && !d.reminders.length) return;
+    const body = $('#digest-body');
+    body.innerHTML = '';
+    if (d.reminders.length) {
+      const sec = el('<div class="dsec"><h4>⏰ Recordatorios</h4></div>');
+      for (const r of d.reminders)
+        sec.append(el(`<div class="ditem"><div class="dt">${esc(r.text)}</div><div class="dd">${esc(new Date(r.dueAt).toLocaleString('es'))}</div></div>`));
+      body.append(sec);
+    }
+    if (d.newTasks.length) {
+      const sec = el(`<div class="dsec"><h4>🆕 Tareas propuestas nuevas (${d.newTasks.length})</h4></div>`);
+      for (const t of d.newTasks)
+        sec.append(el(`<div class="ditem"><div class="dt">${esc(t.title)}</div>${t.clientHint ? `<div class="dd">cliente: ${esc(displayName(t.clientHint))}</div>` : ''}</div>`));
+      body.append(sec);
+    }
+    $('#digest-overlay').hidden = false;
+    $('#digest-ok').onclick = async () => {
+      $('#digest-overlay').hidden = true;
+      await fetch('/api/digest/seen', { method: 'POST' });
+      for (const r of d.reminders) fetch(`/api/agenda/${r.id}/dismiss`, { method: 'POST' });
+      loadReminders();
+    };
+  } catch {
+    /* digest is best-effort */
+  }
+}
 
 // ---- Memory ----
 async function loadMemory() {
@@ -1096,4 +1216,5 @@ async function refreshWa() {
   loadStats();
   loadInbox();
   loadTasks();
+  checkDigest();
 })();

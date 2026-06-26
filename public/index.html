@@ -33,7 +33,6 @@
           <span id="inbox-selcount" class="selcount"></span>
           <span class="bulk" id="inbox-bulk" hidden>
             <button class="approve" id="inbox-bulk-approve">✓ Aprobar</button>
-            <button id="inbox-bulk-dismiss">Descartar</button>
             <button class="dismiss" id="inbox-bulk-delete">🗑 Eliminar</button>
           </span>
         </div>
@@ -121,11 +120,16 @@
           <aside class="chat-side">
             <button id="new-thread" class="primary">+ Nueva conversación</button>
             <div id="thread-list" class="thread-list"></div>
+            <button id="show-reminders" class="mem-toggle">⏰ Recordatorios <span id="reminders-count" class="pill">0</span></button>
             <button id="show-memory" class="mem-toggle">🧠 Memoria <span id="memory-count" class="pill">0</span></button>
           </aside>
           <div class="chat-main">
             <div id="chat-log" class="chat-log"></div>
+            <span id="chat-file-chip" class="file-chip" hidden></span>
             <form id="chat-form" class="chat-form">
+              <label class="attach-btn" title="Adjuntar imagen o PDF">📎
+                <input type="file" id="chat-file" accept="image/*,application/pdf" hidden />
+              </label>
               <input id="chat-input" placeholder="p. ej. ¿Qué me pidieron los clientes esta semana que aún no he hecho?" autocomplete="off" />
               <button class="primary" type="submit">Enviar</button>
             </form>
@@ -136,6 +140,14 @@
               </div>
               <p class="hint">Datos que el asistente ha guardado para recordar entre conversaciones. Elimina lo que no quieras que recuerde.</p>
               <div id="memory-list" class="cards"></div>
+            </div>
+            <div id="reminders-panel" class="memory-panel" hidden>
+              <div class="mem-head">
+                <strong>⏰ Recordatorios programados</strong>
+                <button id="close-reminders">cerrar</button>
+              </div>
+              <p class="hint">Recordatorios que programaste con el asistente. Cancela los que ya no necesites.</p>
+              <div id="reminders-list" class="cards"></div>
             </div>
           </div>
         </div>
@@ -258,6 +270,14 @@
         </div>
       </section>
     </main>
+
+    <div id="digest-overlay" class="overlay" hidden>
+      <div class="modal">
+        <h2 id="digest-title">☀️ Buenos días</h2>
+        <div id="digest-body"></div>
+        <div class="modal-actions"><button id="digest-ok" class="primary">Entendido</button></div>
+      </div>
+    </div>
 
     <script src="/app.js"></script>
   </body>

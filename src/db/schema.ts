@@ -87,4 +87,17 @@ CREATE TABLE IF NOT EXISTS chat_memory (
   source_thread_id INTEGER,
   created_at      INTEGER NOT NULL
 );
+
+-- One-off reminders the assistant schedules ("recuérdame mañana…").
+CREATE TABLE IF NOT EXISTS ai_reminders (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  text             TEXT    NOT NULL,
+  due_at           INTEGER NOT NULL,            -- when to surface it, unix ms
+  created_at       INTEGER NOT NULL,
+  notified_at      INTEGER,                     -- native notification fired
+  dismissed_at     INTEGER,                     -- user dismissed/cancelled
+  source_thread_id INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_reminders_due ON ai_reminders (due_at);
 `;

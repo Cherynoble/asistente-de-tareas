@@ -33,6 +33,14 @@ import {
 } from '../chat/store.js';
 import { nameMap } from '../names.js';
 import { resolveContactName } from '../ingest/contacts.js';
+import { describeAttachment } from '../extract/vision.js';
+import {
+  listReminders,
+  dueReminders,
+  dismissReminder,
+  deleteReminder,
+  sweepReminderNotifications,
+} from '../notify/scheduled.js';
 import { macNotify } from '../notify/mac.js';
 import {
   buildDigest,
@@ -57,7 +65,7 @@ const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
 const NATIVE_IMAGE = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '30mb' })); // base64 image/PDF uploads in chat
 app.use(express.static(PUBLIC_DIR));
 
 /** Proposed tasks awaiting review, with the message that triggered each. */
@@ -397,6 +405,80 @@ app.get('/api/memory', (_req, res) => {
 });
 app.delete('/api/memory/:id', (req, res) => {
   deleteMemory(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+/**
+ * Send an image/PDF in a chat thread: save it, describe it with vision, and feed
+ * that description into the chat turn so the assistant can discuss it (and create
+ * a task from it if asked). Files come as base64 JSON (no multipart dependency).
+ */
+app.post('/api/chat/upload', async (req, res) => {
+  if (!getApiKey()) {
+    res.status(400).json({ error: 'No ANTHROPIC_API_KEY set in .env' });
+    return;
+  }
+  const b =
+    (req.body as { threadId?: number; message?: string; fileName?: string; mimeType?: string; dataBase64?: string }) ??
+    {};
+  const mime = b.mimeType ?? '';
+  const data = b.dataBase64 ?? '';
+  const name = (b.fileName ?? 'archivo').replace(/[^\w.\- ]/g, '_').slice(0, 80);
+  if (!data || !(/^image\//.test(mime) || mime === 'application/pdf')) {
+    res.status(400).json({ error: 'Solo se permiten imágenes o PDF.' });
+    return;
+  }
+  try {
+    const userText = (b.message ?? '').trim();
+    let threadId = Number(b.threadId);
+    let createdThread = false;
+    if (!threadId || !Number.isFinite(threadId)) {
+      threadId = createThread(titleFrom(userText || name));
+      createdThread = true;
+    } else if (threadMessages(threadId).length === 0) {
+      renameThread(threadId, titleFrom(userText || name));
+    }
+    const dir = path.join(config.dataDir, 'chat_uploads', String(threadId));
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, `${Date.now()}-${name}`);
+    fs.writeFileSync(filePath, Buffer.from(data, 'base64'));
+
+    const desc = await describeAttachment(filePath, mime);
+    const composed = `${userText ? userText + '\n\n' : ''}🔎 Archivo adjunto: ${name}\nAnálisis del archivo:\n${desc}`;
+    const { reply, usedTools } = await runTurn(threadId, composed, [{ name }]);
+    res.json({ reply, threadId, createdThread, usedTools, attachment: { name }, analysis: desc });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** Scheduled (AI) reminders: list / dismiss / delete. */
+app.get('/api/agenda', (_req, res) => {
+  res.json(listReminders());
+});
+app.post('/api/agenda/:id/dismiss', (req, res) => {
+  dismissReminder(Number(req.params.id));
+  res.json({ ok: true });
+});
+app.delete('/api/agenda/:id', (req, res) => {
+  deleteReminder(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+/** Launch digest: tasks auto-proposed since last seen + reminders now due. */
+app.get('/api/digest', (_req, res) => {
+  const lastSeen = Number(getSetting('last_digest_seen') ?? '0');
+  const newTasks = db()
+    .prepare(
+      `SELECT id, title, detail, client_hint AS clientHint FROM tasks
+       WHERE created_at > ? AND status = 'proposed' AND archived_at IS NULL AND deleted_at IS NULL
+       ORDER BY created_at DESC LIMIT 50`,
+    )
+    .all(lastSeen);
+  res.json({ newTasks, reminders: dueReminders(), lastSeen });
+});
+app.post('/api/digest/seen', (_req, res) => {
+  setSetting('last_digest_seen', String(Date.now()));
   res.json({ ok: true });
 });
 
@@ -781,6 +863,15 @@ app.listen(PORT, () => {
   console.log(`\n  Dad's App dashboard → http://localhost:${PORT}\n`);
   applySchedule();
   startNudgeLoop();
+  // Fire native notifications for scheduled reminders that come due (every 5 min;
+  // the launch digest is the reliable backstop).
+  setInterval(() => {
+    try {
+      sweepReminderNotifications();
+    } catch (err) {
+      console.error('[reminders] sweep failed:', err instanceof Error ? err.message : err);
+    }
+  }, 5 * 60 * 1000);
   // Reconnect WhatsApp automatically if a session was already paired.
   if (hasWaSession()) {
     console.log('  WhatsApp session found — reconnecting…');

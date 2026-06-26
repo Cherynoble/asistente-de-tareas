@@ -193,8 +193,25 @@ select.status { padding: 5px 8px; border: 1px solid var(--line); border-radius: 
 .bubble.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
 .bubble.bot { align-self: flex-start; background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .bubble.bot.thinking { color: var(--muted); font-style: italic; }
-.chat-form { display: flex; gap: 8px; margin-top: 10px; }
-.chat-form input { flex: 1; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; font-size: 14px; }
+.chat-form { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.chat-form input[type='text'], .chat-form #chat-input { flex: 1; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; font-size: 14px; }
+.attach-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; font-size: 18px; background: #fff; }
+.attach-btn:hover { background: #f3f6fb; }
+.file-chip { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; margin: 6px 0 0; padding: 5px 10px; background: #eef4ff; border: 1px solid #cfe0ff; border-radius: 8px; font-size: 13px; color: #2f4a86; }
+.file-chip button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0; font-size: 14px; }
+.bubble .att { display: inline-block; margin-bottom: 5px; padding: 2px 8px; background: rgba(255,255,255,0.25); border-radius: 6px; font-size: 12px; }
+.bubble.bot .att { background: #eef1f6; color: var(--muted); }
+
+/* Modal overlay (launch digest) */
+.overlay { position: fixed; inset: 0; background: rgba(20,30,50,0.45); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+.modal { background: var(--card); border-radius: 14px; padding: 22px 24px; max-width: 520px; width: 100%; max-height: 80vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(20,30,50,0.25); }
+.modal h2 { margin: 0 0 14px; font-size: 19px; }
+.modal .dsec { margin-bottom: 14px; }
+.modal .dsec h4 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.modal .ditem { padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 7px; }
+.modal .ditem .dt { font-weight: 600; }
+.modal .ditem .dd { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.modal-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
 
 /* WhatsApp */
 .wa-qr { width: 240px; height: 240px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 6px; display: block; }

@@ -6,9 +6,13 @@ export interface Thread {
   createdAt: number;
   updatedAt: number;
 }
+export interface Attachment {
+  name: string;
+}
 export interface StoredMsg {
   role: 'user' | 'assistant';
   content: string;
+  attachments?: Attachment[];
 }
 export interface Memory {
   id: number;
@@ -44,16 +48,28 @@ export function renameThread(id: number, title: string): void {
 }
 
 export function threadMessages(threadId: number): StoredMsg[] {
-  return db()
-    .prepare(`SELECT role, content FROM chat_messages WHERE thread_id = ? ORDER BY id ASC`)
-    .all(threadId) as StoredMsg[];
+  const rows = db()
+    .prepare(`SELECT role, content, attachments FROM chat_messages WHERE thread_id = ? ORDER BY id ASC`)
+    .all(threadId) as { role: 'user' | 'assistant'; content: string; attachments: string }[];
+  return rows.map((r) => ({
+    role: r.role,
+    content: r.content,
+    attachments: r.attachments ? (JSON.parse(r.attachments) as Attachment[]) : [],
+  }));
 }
 
-export function addMessage(threadId: number, role: 'user' | 'assistant', content: string): void {
+export function addMessage(
+  threadId: number,
+  role: 'user' | 'assistant',
+  content: string,
+  attachments: Attachment[] = [],
+): void {
   const now = Date.now();
   db()
-    .prepare(`INSERT INTO chat_messages (thread_id, role, content, created_at) VALUES (?, ?, ?, ?)`)
-    .run(threadId, role, content, now);
+    .prepare(
+      `INSERT INTO chat_messages (thread_id, role, content, attachments, created_at) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(threadId, role, content, attachments.length ? JSON.stringify(attachments) : '', now);
   db().prepare(`UPDATE chat_threads SET updated_at = ? WHERE id = ?`).run(now, threadId);
 }
 

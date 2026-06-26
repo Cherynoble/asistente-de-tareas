@@ -20,6 +20,13 @@ function migrate(d: Database.Database): void {
   ensureColumn(d, 'tasks', 'archived_at', 'INTEGER');
   ensureColumn(d, 'tasks', 'deleted_at', 'INTEGER');
   ensureColumn(d, 'clients', 'deleted_at', 'INTEGER');
+  // chat_messages exists since 0.2.0; attachments added in 0.3.0.
+  const hasChatMessages = (
+    d.prepare(`SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name='chat_messages'`).get() as {
+      n: number;
+    }
+  ).n;
+  if (hasChatMessages) ensureColumn(d, 'chat_messages', 'attachments', `TEXT NOT NULL DEFAULT ''`);
 }
 
 /** The app's own database (data/app.db), created on first use. */
