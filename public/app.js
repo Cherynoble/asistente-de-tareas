@@ -56,6 +56,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
     if (id === 'archive') loadArchive();
     if (id === 'tasks') loadTasks();
     if (id === 'trash') loadTrash();
+    if (id === 'chat') initChat();
     if (id === 'clients') loadSenders();
     if (id === 'settings') {
       loadSettings();
@@ -604,17 +605,83 @@ $('#trash-empty').onclick = async () => {
   await Promise.all([loadTrash(), loadSenders(), loadNames(), loadStats()]);
 };
 
-// ---- Chat ----
-const chatHistory = [];
+// ---- Chat (threads + memory) ----
+let currentThreadId = null;
+let chatInited = false;
+
+function bubble(role, text) {
+  return el(`<div class="bubble ${role === 'user' ? 'user' : 'bot'}">${esc(text)}</div>`);
+}
+
+async function loadThreads() {
+  const threads = await (await fetch('/api/threads')).json();
+  const list = $('#thread-list');
+  list.innerHTML = '';
+  for (const t of threads) {
+    const item = el(`<div class="thread-item ${t.id === currentThreadId ? 'active' : ''}">
+      <span class="tt">${esc(t.title)}</span>
+      <button class="del-thread" title="Eliminar conversación">🗑</button>
+    </div>`);
+    item.querySelector('.tt').onclick = () => openThread(t.id);
+    item.querySelector('.del-thread').onclick = async (e) => {
+      e.stopPropagation();
+      if (!confirm('¿Eliminar esta conversación?')) return;
+      await fetch(`/api/threads/${t.id}`, { method: 'DELETE' });
+      if (currentThreadId === t.id) newThread();
+      await loadThreads();
+    };
+    list.append(item);
+  }
+}
+
+async function openThread(id) {
+  currentThreadId = id;
+  showChatView();
+  const msgs = await (await fetch(`/api/threads/${id}`)).json();
+  const log = $('#chat-log');
+  log.innerHTML = '';
+  for (const m of msgs) log.append(bubble(m.role, m.content));
+  log.scrollTop = log.scrollHeight;
+  await loadThreads();
+}
+
+function newThread() {
+  currentThreadId = null;
+  showChatView();
+  const log = $('#chat-log');
+  log.innerHTML = '';
+  log.append(el('<div class="empty">Nueva conversación. Pregúntame sobre tus mensajes, clientes o tareas.</div>'));
+  document.querySelectorAll('.thread-item').forEach((i) => i.classList.remove('active'));
+  $('#chat-input').focus();
+}
+
+function showChatView() {
+  $('#memory-panel').hidden = true;
+  $('#chat-log').style.display = '';
+  $('#chat-form').style.display = '';
+}
+
+async function initChat() {
+  if (chatInited) return;
+  chatInited = true;
+  await Promise.all([loadThreads(), loadMemory()]);
+  const threads = await (await fetch('/api/threads')).json();
+  if (threads.length) openThread(threads[0].id);
+  else newThread();
+}
+
+$('#new-thread').onclick = newThread;
+
 $('#chat-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const input = $('#chat-input');
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
-  chatHistory.push({ role: 'user', content: text });
+  showChatView();
   const log = $('#chat-log');
-  log.append(el(`<div class="bubble user">${esc(text)}</div>`));
+  if (log.querySelector('.empty')) log.innerHTML = '';
+  log.append(bubble('user', text));
   const thinking = el('<div class="bubble bot thinking">pensando…</div>');
   log.append(thinking);
   log.scrollTop = log.scrollHeight;
@@ -623,19 +690,53 @@ $('#chat-form').addEventListener('submit', async (e) => {
       await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: chatHistory }),
+        body: JSON.stringify({ threadId: currentThreadId, message: text }),
       })
     ).json();
     thinking.remove();
-    const reply = r.reply || `(error: ${r.error || 'sin respuesta'})`;
-    chatHistory.push({ role: 'assistant', content: reply });
-    log.append(el(`<div class="bubble bot">${esc(reply)}</div>`));
+    if (r.threadId) currentThreadId = r.threadId;
+    log.append(bubble('bot', r.reply || `(error: ${r.error || 'sin respuesta'})`));
+    if (r.usedTools && r.usedTools.includes('save_memory')) {
+      log.append(el('<div class="empty" style="padding:6px">🧠 guardé algo en la memoria</div>'));
+      loadMemory();
+    }
+    if (r.createdThread) await loadThreads();
   } catch (err) {
     thinking.remove();
-    log.append(el(`<div class="bubble bot">(error: ${esc(String(err))})</div>`));
+    log.append(bubble('bot', `(error: ${String(err)})`));
   }
   log.scrollTop = log.scrollHeight;
 });
+
+// ---- Memory ----
+async function loadMemory() {
+  const mems = await (await fetch('/api/memory')).json();
+  $('#memory-count').textContent = mems.length;
+  const list = $('#memory-list');
+  list.innerHTML = '';
+  if (!mems.length) {
+    list.append(el('<div class="empty">El asistente aún no ha guardado nada. Cuéntale algo que deba recordar.</div>'));
+    return;
+  }
+  for (const m of mems) {
+    const card = el(`<div class="card mem-item">
+      <span class="mc">${esc(m.content)}</span>
+      <button class="dismiss">🗑</button>
+    </div>`);
+    card.querySelector('.dismiss').onclick = async () => {
+      await fetch(`/api/memory/${m.id}`, { method: 'DELETE' });
+      await loadMemory();
+    };
+    list.append(card);
+  }
+}
+$('#show-memory').onclick = () => {
+  $('#chat-log').style.display = 'none';
+  $('#chat-form').style.display = 'none';
+  $('#memory-panel').hidden = false;
+  loadMemory();
+};
+$('#close-memory').onclick = showChatView;
 
 // ---- Settings ----
 async function loadSettings() {

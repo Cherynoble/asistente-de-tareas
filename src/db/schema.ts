@@ -61,4 +61,30 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Saved chat conversations (threads) with the assistant.
+CREATE TABLE IF NOT EXISTS chat_threads (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  title       TEXT    NOT NULL DEFAULT 'Nueva conversación',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread_id  INTEGER NOT NULL REFERENCES chat_threads (id) ON DELETE CASCADE,
+  role       TEXT    NOT NULL,            -- 'user' | 'assistant'
+  content    TEXT    NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages (thread_id);
+
+-- Long-term memory the assistant reads/writes across conversations.
+CREATE TABLE IF NOT EXISTS chat_memory (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  content         TEXT    NOT NULL,
+  source_thread_id INTEGER,
+  created_at      INTEGER NOT NULL
+);
 `;

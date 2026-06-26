@@ -117,12 +117,28 @@
 
       <!-- CHAT -->
       <section id="chat" class="panel">
-        <p class="hint">Pregunta sobre tus mensajes y tareas — la IA responde usando tus mensajes recientes, clientes y tareas actuales como contexto.</p>
-        <div id="chat-log" class="chat-log"></div>
-        <form id="chat-form" class="chat-form">
-          <input id="chat-input" placeholder="p. ej. ¿Qué me pidieron los clientes esta semana que aún no he hecho?" autocomplete="off" />
-          <button class="primary" type="submit">Enviar</button>
-        </form>
+        <div class="chat-layout">
+          <aside class="chat-side">
+            <button id="new-thread" class="primary">+ Nueva conversación</button>
+            <div id="thread-list" class="thread-list"></div>
+            <button id="show-memory" class="mem-toggle">🧠 Memoria <span id="memory-count" class="pill">0</span></button>
+          </aside>
+          <div class="chat-main">
+            <div id="chat-log" class="chat-log"></div>
+            <form id="chat-form" class="chat-form">
+              <input id="chat-input" placeholder="p. ej. ¿Qué me pidieron los clientes esta semana que aún no he hecho?" autocomplete="off" />
+              <button class="primary" type="submit">Enviar</button>
+            </form>
+            <div id="memory-panel" class="memory-panel" hidden>
+              <div class="mem-head">
+                <strong>🧠 Memoria del asistente</strong>
+                <button id="close-memory">cerrar</button>
+              </div>
+              <p class="hint">Datos que el asistente ha guardado para recordar entre conversaciones. Elimina lo que no quieras que recuerde.</p>
+              <div id="memory-list" class="cards"></div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- PROCESO -->

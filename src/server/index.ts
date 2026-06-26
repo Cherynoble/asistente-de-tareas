@@ -20,7 +20,17 @@ import {
   hasWaSession,
   listWaChats,
 } from '../ingest/whatsapp/client.js';
-import { chat, type ChatMsg } from '../chat/index.js';
+import { runTurn } from '../chat/index.js';
+import {
+  listThreads,
+  createThread,
+  deleteThread,
+  threadMessages,
+  titleFrom,
+  renameThread,
+  listMemories,
+  deleteMemory,
+} from '../chat/store.js';
 import { nameMap } from '../names.js';
 import { macNotify } from '../notify/mac.js';
 import {
@@ -315,7 +325,8 @@ app.post('/api/clients', (req, res) => {
       `INSERT INTO clients (handle, name, product_need, created_at, updated_at)
        VALUES (@handle, @name, @productNeed, @now, @now)
        ON CONFLICT(handle) DO UPDATE SET
-         name = excluded.name, product_need = excluded.product_need, updated_at = excluded.updated_at`,
+         name = excluded.name, product_need = excluded.product_need,
+         deleted_at = NULL, updated_at = excluded.updated_at`,
     )
     .run({ handle, name: name.trim(), productNeed: (productNeed ?? '').trim(), now });
   res.json({ ok: true });
@@ -326,19 +337,66 @@ app.get('/api/namemap', (_req, res) => {
   res.json(nameMap());
 });
 
-/** Chat with Haiku using the message/task/client database as context. */
+/** List saved chat threads. */
+app.get('/api/threads', (_req, res) => {
+  res.json(listThreads());
+});
+
+/** Create a new chat thread. */
+app.post('/api/threads', (_req, res) => {
+  res.json({ id: createThread() });
+});
+
+/** Messages of one thread. */
+app.get('/api/threads/:id', (req, res) => {
+  res.json(threadMessages(Number(req.params.id)));
+});
+
+/** Delete a thread and its messages. */
+app.delete('/api/threads/:id', (req, res) => {
+  deleteThread(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+/**
+ * Send a message in a thread and get the assistant's reply. Creates the thread
+ * if none is given, and titles it from the first message. Uses Haiku with the
+ * DB + long-term memory as context, and may call the save_memory tool.
+ */
 app.post('/api/chat', async (req, res) => {
   if (!getApiKey()) {
     res.status(400).json({ error: 'No ANTHROPIC_API_KEY set in .env' });
     return;
   }
-  const history = ((req.body as { messages?: ChatMsg[] })?.messages ?? []).slice(-20);
+  const body = (req.body as { threadId?: number; message?: string }) ?? {};
+  const message = (body.message ?? '').trim();
+  if (!message) {
+    res.status(400).json({ error: 'message required' });
+    return;
+  }
   try {
-    const reply = await chat(history);
-    res.json({ reply });
+    let threadId = Number(body.threadId);
+    let createdThread = false;
+    if (!threadId || !Number.isFinite(threadId)) {
+      threadId = createThread(titleFrom(message));
+      createdThread = true;
+    } else if (threadMessages(threadId).length === 0) {
+      renameThread(threadId, titleFrom(message));
+    }
+    const { reply, usedTools } = await runTurn(threadId, message);
+    res.json({ reply, threadId, createdThread, usedTools });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
+});
+
+/** The assistant's long-term memory (read / delete). */
+app.get('/api/memory', (_req, res) => {
+  res.json(listMemories());
+});
+app.delete('/api/memory/:id', (req, res) => {
+  deleteMemory(Number(req.params.id));
+  res.json({ ok: true });
 });
 
 /** Start the read-only WhatsApp mirror (begins QR pairing). */

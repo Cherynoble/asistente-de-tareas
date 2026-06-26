@@ -1,30 +1,49 @@
+import type Anthropic from '@anthropic-ai/sdk';
 import { db } from '../db/index.js';
 import { config } from '../config.js';
 import { anthropicClient } from '../settings.js';
 import { nameMap } from '../names.js';
+import { addMessage, threadMessages, listMemories, saveMemory } from './store.js';
 
 export interface ChatMsg {
   role: 'user' | 'assistant';
   content: string;
 }
 
-const SYSTEM = `You are the assistant inside "Dad's App", a task tracker for a trading-company owner. You can see his recent messages, his clients, and his current tasks (provided below as context). Help him: answer what a client asked for, what's pending or overdue, what he might be forgetting, draft a reply, etc. Be concise and practical. Only use the provided context — if the answer isn't there, say so rather than guessing.
+const SYSTEM = `You are the assistant inside "Dad's App", a task tracker for a trading-company owner. You can see his recent messages, his clients, his current tasks, and durable memory (provided below as context). Help him: answer what a client asked for, what's pending or overdue, what he might be forgetting, draft a reply, etc. Be concise and practical. Only use the provided context — if the answer isn't there, say so rather than guessing.
+
+You have a save_memory tool: when the owner tells you something durable worth remembering across conversations (a lasting preference, a standing instruction, a key fact about a client or his business), call save_memory with a concise one-sentence fact. Do NOT save ephemeral chatter, one-off questions, or things already in the tasks/clients data.
 
 IMPORTANT: The user is a native Spanish speaker. ALWAYS reply in Spanish (neutral Latin-American Spanish), regardless of the language of the messages or tasks in the context. Keep proper names, product names, and quoted message snippets in their original language.`;
 
-/** Build a context block from the DB: open tasks, named clients, recent messages. */
+const TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'save_memory',
+    description:
+      'Guarda un dato duradero sobre el usuario, sus clientes, su negocio o sus preferencias para recordarlo en futuras conversaciones. Úsalo solo cuando el usuario comparta algo que valga la pena recordar a largo plazo — no para detalles efímeros ni preguntas puntuales.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        fact: { type: 'string', description: 'El dato a recordar, en una sola frase concisa.' },
+      },
+      required: ['fact'],
+    },
+  },
+];
+
+/** Build a context block from the DB: open tasks, named clients, recent messages, memory. */
 function buildContext(): string {
   const d = db();
   const tasks = d
     .prepare(
       `SELECT title, status, client_hint FROM tasks
-       WHERE status IN ('proposed','todo','waiting') AND archived_at IS NULL
+       WHERE status IN ('proposed','todo','waiting') AND archived_at IS NULL AND deleted_at IS NULL
        ORDER BY updated_at DESC LIMIT 100`,
     )
     .all() as { title: string; status: string; client_hint: string }[];
 
   const clients = d
-    .prepare(`SELECT name, handle, product_need FROM clients`)
+    .prepare(`SELECT name, handle, product_need FROM clients WHERE deleted_at IS NULL`)
     .all() as { name: string; handle: string | null; product_need: string }[];
 
   const names = nameMap();
@@ -34,6 +53,9 @@ function buildContext(): string {
       .prepare(`SELECT sender, direction, body FROM messages ORDER BY ts DESC LIMIT 250`)
       .all() as { sender: string | null; direction: string; body: string }[]
   ).reverse();
+
+  // Cap injected memories so the store can grow without saturating the window.
+  const memories = listMemories().slice(0, 40);
 
   const tasksTxt = tasks.length
     ? tasks
@@ -51,18 +73,72 @@ function buildContext(): string {
       return `${who}: ${m.body}`;
     })
     .join('\n');
+  const memTxt = memories.length ? memories.map((m) => `- ${m.content}`).join('\n') : '(none yet)';
 
-  return `CURRENT OPEN TASKS:\n${tasksTxt}\n\nKNOWN CLIENTS:\n${clientsTxt}\n\nRECENT MESSAGES (most recent 250, oldest first):\n${msgsTxt}`;
+  return `LONG-TERM MEMORY (things you saved before):\n${memTxt}\n\nCURRENT OPEN TASKS:\n${tasksTxt}\n\nKNOWN CLIENTS:\n${clientsTxt}\n\nRECENT MESSAGES (most recent 250, oldest first):\n${msgsTxt}`;
 }
 
-/** Answer a chat turn using the DB as context. */
-export async function chat(history: ChatMsg[]): Promise<string> {
-  const resp = await anthropicClient().messages.create({
-    model: config.model,
-    max_tokens: 1024,
-    system: `${SYSTEM}\n\n--- CONTEXT (from the database) ---\n${buildContext()}`,
-    messages: history.map((m) => ({ role: m.role, content: m.content })),
-  });
-  const block = resp.content.find((b) => b.type === 'text');
-  return block && block.type === 'text' ? block.text : '';
+/** Execute a tool the model called; returns a short result string. */
+function execTool(name: string, input: unknown, threadId: number): string {
+  if (name === 'save_memory') {
+    const fact = (input as { fact?: string })?.fact ?? '';
+    saveMemory(fact, threadId);
+    return 'Guardado en memoria.';
+  }
+  return 'Herramienta desconocida.';
+}
+
+/**
+ * Run one chat turn inside a thread: persist the user message, run the
+ * tool-using loop (currently just save_memory), persist + return the reply.
+ */
+export async function runTurn(
+  threadId: number,
+  userText: string,
+): Promise<{ reply: string; usedTools: string[] }> {
+  addMessage(threadId, 'user', userText);
+
+  const messages: Anthropic.MessageParam[] = threadMessages(threadId).map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+  const client = anthropicClient();
+  const usedTools: string[] = [];
+  let reply = '';
+
+  for (let i = 0; i < 5; i++) {
+    const resp = await client.messages.create({
+      model: config.model,
+      max_tokens: 1024,
+      system: `${SYSTEM}\n\n--- CONTEXT (from the database) ---\n${buildContext()}`,
+      tools: TOOLS,
+      messages,
+    });
+    const text = resp.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map((b) => b.text)
+      .join('');
+    if (text) reply = text;
+
+    if (resp.stop_reason === 'tool_use') {
+      const results: Anthropic.ToolResultBlockParam[] = [];
+      for (const block of resp.content) {
+        if (block.type === 'tool_use') {
+          usedTools.push(block.name);
+          results.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: execTool(block.name, block.input, threadId),
+          });
+        }
+      }
+      messages.push({ role: 'assistant', content: resp.content });
+      messages.push({ role: 'user', content: results });
+      continue;
+    }
+    break;
+  }
+
+  addMessage(threadId, 'assistant', reply);
+  return { reply, usedTools };
 }
