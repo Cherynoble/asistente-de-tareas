@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Asistente de Tareas</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Asistente de Tareas <span class="sub">seguimiento de pedidos</span></h1>
+      <div id="stats" class="stats"></div>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="inbox">Bandeja <span id="inbox-count" class="pill">0</span></button>
+      <button class="tab" data-tab="tasks">Tareas</button>
+      <button class="tab" data-tab="archive">Archivo</button>
+      <button class="tab" data-tab="clients">Clientes</button>
+      <button class="tab" data-tab="chat">Chat</button>
+      <button class="tab" data-tab="pipeline">Proceso</button>
+      <button class="tab" data-tab="settings">Ajustes</button>
+    </nav>
+
+    <main>
+      <!-- BANDEJA -->
+      <section id="inbox" class="panel active">
+        <p class="hint">Tareas propuestas por la IA a partir de tus mensajes. Apruébalas para agregarlas a tu lista, o descártalas.</p>
+        <div id="inbox-list" class="cards"></div>
+      </section>
+
+      <!-- TAREAS -->
+      <section id="tasks" class="panel">
+        <form id="new-task" class="newtask">
+          <input id="nt-title" placeholder="Nueva tarea…" required />
+          <input id="nt-detail" placeholder="detalle (opcional)" />
+          <input id="nt-client" placeholder="cliente (opcional)" />
+          <button class="primary" type="submit">Agregar</button>
+        </form>
+        <div class="cols">
+          <div class="col"><h3>Por hacer</h3><div id="col-todo" class="cards"></div></div>
+          <div class="col"><h3>En espera</h3><div id="col-waiting" class="cards"></div></div>
+          <div class="col"><h3>Hecho</h3><div id="col-done" class="cards"></div></div>
+        </div>
+      </section>
+
+      <!-- ARCHIVO -->
+      <section id="archive" class="panel">
+        <p class="hint">Tareas completadas que archivaste. Desarchiva para recuperar una.</p>
+        <div id="archive-list" class="cards"></div>
+      </section>
+
+      <!-- CLIENTES -->
+      <section id="clients" class="panel">
+        <p class="hint">Ponle nombre a tus contactos para ver nombres reales en vez de números. La nota "qué compran" se usa como contexto para la IA.</p>
+        <div id="senders-list" class="cards"></div>
+      </section>
+
+      <!-- CHAT -->
+      <section id="chat" class="panel">
+        <p class="hint">Pregunta sobre tus mensajes y tareas — la IA responde usando tus mensajes recientes, clientes y tareas actuales como contexto.</p>
+        <div id="chat-log" class="chat-log"></div>
+        <form id="chat-form" class="chat-form">
+          <input id="chat-input" placeholder="p. ej. ¿Qué me pidieron los clientes esta semana que aún no he hecho?" autocomplete="off" />
+          <button class="primary" type="submit">Enviar</button>
+        </form>
+      </section>
+
+      <!-- PROCESO -->
+      <section id="pipeline" class="panel">
+        <p class="hint">Mira el motor en acción: cada mensaje que lee, cada imagen/PDF que analiza y las tareas que propone.</p>
+
+        <div class="controls">
+          <strong>Continuo</strong>
+          <button id="backfill" class="primary">Importar historial</button>
+          <label><input id="backfill-count" type="number" value="2000" min="100" max="50000" /> mensajes</label>
+          <button id="process" class="primary">Procesar mensajes nuevos</button>
+          <span id="proc-status" class="run-status"></span>
+        </div>
+
+        <div class="controls">
+          <strong>Vista previa</strong>
+          <label>últimos <input id="limit" type="number" value="40" min="1" max="300" /> msjs</label>
+          <label class="check"><input id="vision" type="checkbox" checked /> visión</label>
+          <label>máx. imágenes <input id="visionCap" type="number" value="10" min="1" max="50" /></label>
+          <button id="run">Ejecutar vista previa</button>
+          <span id="run-status" class="run-status"></span>
+        </div>
+
+        <div class="pipeline-grid">
+          <div class="pcol">
+            <h3>Mensajes revisados <span id="msg-count" class="pill">0</span></h3>
+            <div id="msg-feed" class="feed"></div>
+          </div>
+          <div class="pcol">
+            <h3>Imágenes y PDF analizados <span id="vis-count" class="pill">0</span></h3>
+            <div id="vis-feed" class="feed"></div>
+          </div>
+          <div class="pcol">
+            <h3>Tareas propuestas <span id="task-count" class="pill">0</span></h3>
+            <div id="task-feed" class="feed"></div>
+          </div>
+        </div>
+      </section>
+      <!-- AJUSTES -->
+      <section id="settings" class="panel">
+        <div class="setblock" id="wa-block">
+          <h3>WhatsApp <span id="wa-status" class="badge">…</span></h3>
+          <p class="hint">Un espejo de solo lectura de tu WhatsApp — nunca envía mensajes. Para vincular: en tu teléfono abre WhatsApp → Ajustes → Dispositivos vinculados → Vincular un dispositivo, y escanea el QR.</p>
+          <div id="wa-body"></div>
+        </div>
+
+        <div class="setblock">
+          <h3>Clave de API de Anthropic</h3>
+          <p class="hint" id="key-status"></p>
+          <div class="setrow">
+            <input id="api-key" type="password" placeholder="sk-ant-…" autocomplete="off" />
+            <button id="save-key" class="primary">Guardar clave</button>
+            <span id="key-saved" class="saved"></span>
+          </div>
+        </div>
+
+        <div class="setblock">
+          <h3>Procesamiento automático diario</h3>
+          <p class="hint">Cada día a esta hora la app trae los mensajes nuevos y propone tareas automáticamente. Requiere que la app esté abierta (siempre encendida en la Mac Studio).</p>
+          <div class="setrow">
+            <label class="check"><input id="sched-on" type="checkbox" /> Ejecutar automáticamente</label>
+            <label>a las <input id="sched-time" type="time" value="07:00" /></label>
+            <button id="save-sched" class="primary">Guardar</button>
+            <span id="sched-saved" class="saved"></span>
+          </div>
+        </div>
+
+        <div class="setblock">
+          <h3>Recordatorios y notificaciones</h3>
+          <p class="hint">Notificaciones nativas de macOS: un resumen matutino de lo pendiente, más avisos que reaparecen hasta completar las tareas. Asegúrate de habilitar las notificaciones de la app en Ajustes del Sistema → Notificaciones.</p>
+          <div class="setrow">
+            <label class="check"><input id="rem-on" type="checkbox" /> Enviar recordatorios</label>
+            <label>recordar cada <input id="rem-interval" type="number" value="2" min="1" max="30" style="width:3.5em" /> días</label>
+            <button id="save-rem" class="primary">Guardar</button>
+            <span id="rem-saved" class="saved"></span>
+          </div>
+          <div class="setrow">
+            <button id="rem-test">Enviar notificación de prueba</button>
+            <button id="rem-digest">Enviar resumen ahora</button>
+            <button id="rem-nudge">Avisar tareas pendientes ahora</button>
+          </div>
+          <div id="rem-preview" class="hint"></div>
+        </div>
+
+        <div class="setblock">
+          <h3>Chats de iMessage a incluir</h3>
+          <p class="hint" id="chats-note">Elige de qué conversaciones extraer tareas. Sin selección = todos los chats.</p>
+          <div id="chats-list" class="chatsel"></div>
+          <div class="setrow">
+            <button id="save-chats" class="primary">Guardar selección</button>
+            <button id="clear-chats">Incluir todos</button>
+            <span id="chats-saved" class="saved"></span>
+          </div>
+        </div>
+
+        <div class="setblock">
+          <h3>Chats de WhatsApp a incluir</h3>
+          <p class="hint" id="wachats-note">Elige de qué conversaciones de WhatsApp extraer tareas. Sin selección = todos los chats.</p>
+          <div id="wachats-list" class="chatsel"></div>
+          <div class="setrow">
+            <button id="save-wachats" class="primary">Guardar selección</button>
+            <button id="clear-wachats">Incluir todos</button>
+            <span id="wachats-saved" class="saved"></span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

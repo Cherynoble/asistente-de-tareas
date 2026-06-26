@@ -1,0 +1,73 @@
+{
+  "name": "dads-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Task tracker that ingests iMessage + WhatsApp and proposes tasks via Claude",
+  "author": "Asia El Mundo",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "db:init": "tsx src/db/init.ts",
+    "imessage:test": "tsx src/ingest/imessage/test.ts",
+    "imessage:ingest": "tsx src/ingest/imessage/ingest.ts",
+    "extract": "tsx src/extract/run.ts",
+    "vision:test": "tsx src/extract/vision-test.ts",
+    "dashboard": "tsx src/server/index.ts",
+    "wa:test": "tsx src/ingest/whatsapp/test.ts",
+    "translate:tasks": "tsx src/extract/translate-tasks.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "rebuild:electron": "electron-rebuild -f -w better-sqlite3 -m .",
+    "rebuild:node": "npm rebuild better-sqlite3",
+    "sign:adhoc": "codesign --force --deep --sign - '/Users/cherynoble/dadsapp-release/mac-arm64/Asistente de Tareas.app' && codesign --verify --deep --strict '/Users/cherynoble/dadsapp-release/mac-arm64/Asistente de Tareas.app'",
+    "app": "npm run build && npm run rebuild:electron && electron . ; npm run rebuild:node",
+    "dist": "npm run build && npm run rebuild:electron && electron-builder --mac --dir && npm run sign:adhoc && npm run rebuild:node",
+    "dist:dmg": "npm run build && npm run rebuild:electron && electron-builder --mac && npm run rebuild:node"
+  },
+  "build": {
+    "appId": "com.dadsapp.asistente",
+    "productName": "Asistente de Tareas",
+    "npmRebuild": false,
+    "files": [
+      "dist/**/*",
+      "public/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**",
+      "node_modules/bindings/**",
+      "node_modules/file-uri-to-path/**"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dir"
+      ],
+      "identity": null
+    },
+    "directories": {
+      "output": "/Users/cherynoble/dadsapp-release",
+      "buildResources": "build"
+    }
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.105.0",
+    "better-sqlite3": "^12.11.1",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "node-cron": "^4.5.0",
+    "qrcode": "^1.5.4",
+    "whatsapp-web.js": "^1.34.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.0.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/qrcode": "^1.5.6",
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.3",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

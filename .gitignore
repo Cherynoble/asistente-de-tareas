@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Local data — NEVER publish (messages, tasks, WhatsApp session, dev DB)
+data/
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Secrets
+.env
+.env.local
+
+# Build output (shipped as release artifacts, not committed)
+dist/
+
+# Logs / OS cruft
+*.log
+.DS_Store
+
+# Machine-local Claude Code settings
+.claude/settings.local.json
