@@ -10,11 +10,12 @@
 // missing or older, and symlink its node_modules to the bundle's, so an online
 // update only has to drop new dist/+public/ files there — no repackaging, no
 // re-signing, and the database (one level up, in DadsApp/) is never touched.
-const { app, BrowserWindow, shell, dialog, Menu } = require('electron');
+const { app, BrowserWindow, shell, dialog, Menu, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
 const { pathToFileURL } = require('node:url');
+const updater = require('./updater.cjs');
 
 const PORT = process.env.PORT || '4319';
 const BUNDLE_ROOT = path.join(__dirname, '..'); // .../Resources/app (or project root in dev)
@@ -119,6 +120,64 @@ async function boot() {
   );
 }
 
+/** Relaunch the app, but stop WhatsApp first so its Chrome isn't orphaned. */
+async function relaunchCleanly() {
+  quitting = true; // suppress the before-quit handler's second shutdown
+  try {
+    if (waClient && waClient.stopWhatsApp) await waClient.stopWhatsApp();
+  } catch {
+    /* best effort */
+  }
+  app.relaunch();
+  app.exit(0);
+}
+
+/** Menu-driven update flow (works without the web UI). */
+async function checkUpdatesInteractive() {
+  const r = await updater.checkForUpdate();
+  if (r.status === 'error') {
+    dialog.showErrorBox('Buscar actualizaciones', r.message || 'No se pudo comprobar.');
+    return;
+  }
+  if (r.status === 'up-to-date') {
+    dialog.showMessageBox(win, {
+      type: 'info',
+      message: 'La app está actualizada.',
+      detail: `Versión actual: ${r.currentVersion}`,
+      buttons: ['OK'],
+    });
+    return;
+  }
+  if (r.status === 'needs-new-app') {
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'info',
+      message: 'Hay una versión nueva que requiere descargar la app de nuevo.',
+      detail: `Versión ${r.latestVersion}. Ábrela desde la página de descargas.`,
+      buttons: ['Abrir página', 'Ahora no'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) shell.openExternal(r.page);
+    return;
+  }
+  // available
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question',
+    message: `Actualización disponible (${r.latestVersion}).`,
+    detail: (r.notes ? `${r.notes}\n\n` : '') + 'Se instalará y la app se reiniciará.',
+    buttons: ['Instalar y reiniciar', 'Ahora no'],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (response !== 0) return;
+  const applied = await updater.applyUpdate(r.zipUrl);
+  if (!applied.ok) {
+    dialog.showErrorBox('Actualización', applied.message || 'No se pudo instalar.');
+    return;
+  }
+  await relaunchCleanly();
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1240,
@@ -126,7 +185,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: 'Asistente de Tareas',
-    webPreferences: { contextIsolation: true },
+    webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.cjs') },
   });
   win.loadURL(`http://localhost:${PORT}`);
   // Links that try to open a new window go to the real browser instead.
@@ -149,10 +208,34 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
 
+  // Updater bridge for the web UI (preload.cjs → window.updater).
+  ipcMain.handle('updater:check', () => updater.checkForUpdate());
+  ipcMain.handle('updater:version', () => updater.currentCodeVersion());
+  ipcMain.handle('updater:apply', async (_e, zipUrl) => {
+    const r = await updater.applyUpdate(zipUrl);
+    if (r.ok) setTimeout(() => relaunchCleanly(), 600);
+    return r;
+  });
+
   app.whenReady().then(async () => {
-    // A simple Spanish-friendly default menu (Edit menu enables copy/paste).
+    // Spanish-friendly menu; the app menu carries "Buscar actualizaciones…".
     Menu.setApplicationMenu(Menu.buildFromTemplate([
-      { role: 'appMenu' },
+      {
+        label: app.name,
+        submenu: [
+          { role: 'about' },
+          { type: 'separator' },
+          { label: 'Buscar actualizaciones…', click: () => checkUpdatesInteractive() },
+          { type: 'separator' },
+          { role: 'services' },
+          { type: 'separator' },
+          { role: 'hide' },
+          { role: 'hideOthers' },
+          { role: 'unhide' },
+          { type: 'separator' },
+          { role: 'quit' },
+        ],
+      },
       { role: 'editMenu' },
       { role: 'viewMenu' },
       { role: 'windowMenu' },

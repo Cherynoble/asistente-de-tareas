@@ -104,6 +104,16 @@
       </section>
       <!-- AJUSTES -->
       <section id="settings" class="panel">
+        <div class="setblock" id="update-block" style="display:none">
+          <h3>Actualizaciones <span id="upd-badge" class="badge" style="display:none">nueva</span></h3>
+          <p class="hint" id="upd-status">Versión actual: …</p>
+          <div class="setrow">
+            <button id="upd-check" class="primary">Buscar actualizaciones</button>
+            <button id="upd-install" style="display:none">Instalar y reiniciar</button>
+            <span id="upd-msg" class="hint" style="margin:0"></span>
+          </div>
+        </div>
+
         <div class="setblock" id="wa-block">
           <h3>WhatsApp <span id="wa-status" class="badge">…</span></h3>
           <p class="hint">Un espejo de solo lectura de tu WhatsApp — nunca envía mensajes. Para vincular: en tu teléfono abre WhatsApp → Ajustes → Dispositivos vinculados → Vincular un dispositivo, y escanea el QR.</p>

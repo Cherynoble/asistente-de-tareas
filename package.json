@@ -1,6 +1,6 @@
 {
   "name": "dads-app",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Task tracker that ingests iMessage + WhatsApp and proposes tasks via Claude",
@@ -21,7 +21,8 @@
     "sign:adhoc": "codesign --force --deep --sign - '/Users/cherynoble/dadsapp-release/mac-arm64/Asistente de Tareas.app' && codesign --verify --deep --strict '/Users/cherynoble/dadsapp-release/mac-arm64/Asistente de Tareas.app'",
     "app": "npm run build && npm run rebuild:electron && electron . ; npm run rebuild:node",
     "dist": "npm run build && npm run rebuild:electron && electron-builder --mac --dir && npm run sign:adhoc && npm run rebuild:node",
-    "dist:dmg": "npm run build && npm run rebuild:electron && electron-builder --mac && npm run rebuild:node"
+    "dist:dmg": "npm run build && npm run rebuild:electron && electron-builder --mac && npm run rebuild:node",
+    "release": "node scripts/release.mjs"
   },
   "build": {
     "appId": "com.dadsapp.asistente",

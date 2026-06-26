@@ -388,6 +388,57 @@ async function loadSettings() {
   $('#rem-on').checked = s.remindersEnabled;
   $('#rem-interval').value = s.nudgeIntervalDays || 2;
   loadReminderPreview();
+  initUpdates();
+}
+
+// ---- Updates (only available inside the Electron app via the preload bridge) ----
+let updatesWired = false;
+let pendingUpdateZip = null;
+async function initUpdates() {
+  if (!window.updater) return; // running in a plain browser (dev) — hide the block
+  $('#update-block').style.display = '';
+  const v = await window.updater.version();
+  $('#upd-status').textContent = `Versión actual: ${v}`;
+  if (!updatesWired) {
+    updatesWired = true;
+    $('#upd-check').addEventListener('click', runUpdateCheck);
+    $('#upd-install').addEventListener('click', runUpdateInstall);
+  }
+}
+
+async function runUpdateCheck() {
+  const msg = $('#upd-msg');
+  msg.textContent = 'Comprobando…';
+  $('#upd-install').style.display = 'none';
+  $('#upd-badge').style.display = 'none';
+  pendingUpdateZip = null;
+  const r = await window.updater.check();
+  if (r.status === 'up-to-date') {
+    msg.textContent = 'La app está actualizada.';
+  } else if (r.status === 'available') {
+    pendingUpdateZip = r.zipUrl;
+    $('#upd-badge').style.display = '';
+    $('#upd-install').style.display = '';
+    msg.textContent = `Disponible la versión ${r.latestVersion}.` + (r.notes ? ` ${r.notes}` : '');
+  } else if (r.status === 'needs-new-app') {
+    msg.innerHTML =
+      `La versión ${esc(r.latestVersion)} requiere descargar la app de nuevo: ` +
+      `<a href="${esc(r.page)}" target="_blank">abrir página</a>.`;
+  } else {
+    msg.textContent = `No se pudo comprobar: ${r.message || 'error'}`;
+  }
+}
+
+async function runUpdateInstall() {
+  if (!pendingUpdateZip) return;
+  $('#upd-install').disabled = true;
+  $('#upd-msg').textContent = 'Descargando e instalando… la app se reiniciará.';
+  const r = await window.updater.apply(pendingUpdateZip);
+  if (!r.ok) {
+    $('#upd-install').disabled = false;
+    $('#upd-msg').textContent = `No se pudo instalar: ${r.message || 'error'}`;
+  }
+  // on success the main process relaunches the app automatically
 }
 
 async function loadReminderPreview() {
