@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS clients (
   name          TEXT    NOT NULL,            -- WhatsApp/chat display name
   handle        TEXT    UNIQUE,              -- phone/handle, if known
   product_need  TEXT    NOT NULL DEFAULT '', -- free text: what they buy / need
+  deleted_at    INTEGER,                     -- soft-delete to Trash; NULL = active
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );
@@ -48,6 +49,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   due_at        INTEGER,                     -- optional deadline, unix ms
   last_nudge_at INTEGER,                      -- last reminder fired, unix ms
   archived_at   INTEGER,                     -- set when archived; hidden from active views
+  deleted_at    INTEGER,                     -- soft-delete to Trash; NULL = active
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );

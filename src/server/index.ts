@@ -59,7 +59,7 @@ app.get('/api/inbox', (_req, res) => {
               m.has_attachment AS hasAttachment
        FROM tasks t
        LEFT JOIN messages m ON m.id = t.source_message_id
-       WHERE t.status = 'proposed' AND t.archived_at IS NULL
+       WHERE t.status = 'proposed' AND t.archived_at IS NULL AND t.deleted_at IS NULL
        ORDER BY t.created_at DESC, t.id DESC`,
     )
     .all();
@@ -72,7 +72,7 @@ app.get('/api/tasks', (_req, res) => {
     .prepare(
       `SELECT id, title, detail, client_hint AS clientHint, source_quote AS sourceQuote,
               status, due_at AS dueAt, updated_at AS updatedAt
-       FROM tasks WHERE status IN ('todo','waiting','done') AND archived_at IS NULL
+       FROM tasks WHERE status IN ('todo','waiting','done') AND archived_at IS NULL AND deleted_at IS NULL
        ORDER BY CASE status WHEN 'todo' THEN 0 WHEN 'waiting' THEN 1 ELSE 2 END, updated_at DESC`,
     )
     .all();
@@ -84,7 +84,7 @@ app.get('/api/archive', (_req, res) => {
   const rows = db()
     .prepare(
       `SELECT id, title, detail, client_hint AS clientHint, status, archived_at AS archivedAt
-       FROM tasks WHERE archived_at IS NOT NULL ORDER BY archived_at DESC`,
+       FROM tasks WHERE archived_at IS NOT NULL AND deleted_at IS NULL ORDER BY archived_at DESC`,
     )
     .all();
   res.json(rows);
@@ -113,6 +113,134 @@ app.post('/api/tasks/:id/archive', (req, res) => {
   db()
     .prepare('UPDATE tasks SET archived_at = ?, updated_at = ? WHERE id = ?')
     .run(undo ? null : Date.now(), Date.now(), Number(req.params.id));
+  res.json({ ok: true });
+});
+
+const TASK_STATUSES = ['proposed', 'todo', 'waiting', 'done', 'dismissed'];
+
+/**
+ * Bulk action over a set of task ids. action ∈
+ * status | archive | unarchive | delete | restore | purge | client | due.
+ * Used by the multi-select toolbars and per-card delete/restore buttons.
+ */
+app.post('/api/tasks/bulk', (req, res) => {
+  const { ids, action, value } = req.body as { ids?: number[]; action?: string; value?: unknown };
+  const idList = Array.isArray(ids) ? ids.map(Number).filter((n) => Number.isFinite(n)) : [];
+  if (!idList.length || !action) {
+    res.status(400).json({ error: 'ids and action required' });
+    return;
+  }
+  const now = Date.now();
+  const ph = idList.map(() => '?').join(',');
+  let sql: string;
+  let head: unknown[];
+  switch (action) {
+    case 'status': {
+      const status = String(value);
+      if (!TASK_STATUSES.includes(status)) {
+        res.status(400).json({ error: 'bad status' });
+        return;
+      }
+      sql = `UPDATE tasks SET status=?, updated_at=? WHERE id IN (${ph})`;
+      head = [status, now];
+      break;
+    }
+    case 'archive':
+      sql = `UPDATE tasks SET archived_at=?, updated_at=? WHERE id IN (${ph})`;
+      head = [now, now];
+      break;
+    case 'unarchive':
+      sql = `UPDATE tasks SET archived_at=NULL, updated_at=? WHERE id IN (${ph})`;
+      head = [now];
+      break;
+    case 'delete':
+      sql = `UPDATE tasks SET deleted_at=?, updated_at=? WHERE id IN (${ph})`;
+      head = [now, now];
+      break;
+    case 'restore':
+      sql = `UPDATE tasks SET deleted_at=NULL, updated_at=? WHERE id IN (${ph})`;
+      head = [now];
+      break;
+    case 'purge':
+      sql = `DELETE FROM tasks WHERE id IN (${ph})`;
+      head = [];
+      break;
+    case 'client':
+      sql = `UPDATE tasks SET client_hint=?, updated_at=? WHERE id IN (${ph})`;
+      head = [String(value ?? '').trim(), now];
+      break;
+    case 'due': {
+      const dueAt = value == null || value === '' ? null : Number(value);
+      sql = `UPDATE tasks SET due_at=?, updated_at=? WHERE id IN (${ph})`;
+      head = [dueAt, now];
+      break;
+    }
+    default:
+      res.status(400).json({ error: 'unknown action' });
+      return;
+  }
+  const info = db().prepare(sql).run(...head, ...idList);
+  res.json({ ok: true, changed: info.changes });
+});
+
+/** Bulk action over a set of client handles. action ∈ delete | restore | purge. */
+app.post('/api/clients/bulk', (req, res) => {
+  const { handles, action } = req.body as { handles?: string[]; action?: string };
+  const list = Array.isArray(handles) ? handles.filter((h) => typeof h === 'string' && h) : [];
+  if (!list.length || !action) {
+    res.status(400).json({ error: 'handles and action required' });
+    return;
+  }
+  const now = Date.now();
+  const ph = list.map(() => '?').join(',');
+  const d = db();
+  if (action === 'delete') {
+    // Tombstone the handle (create an empty record if it isn't a client yet) so
+    // it's hidden from Clientes and its name dropped — tasks are untouched.
+    const ins = d.prepare(
+      `INSERT INTO clients (handle, name, product_need, deleted_at, created_at, updated_at)
+       VALUES (?, '', '', ?, ?, ?)
+       ON CONFLICT(handle) DO UPDATE SET deleted_at = excluded.deleted_at, updated_at = excluded.updated_at`,
+    );
+    const tx = d.transaction((hs: string[]) => {
+      for (const h of hs) ins.run(h, now, now, now);
+    });
+    tx(list);
+  } else if (action === 'restore') {
+    d.prepare(`UPDATE clients SET deleted_at=NULL, updated_at=? WHERE handle IN (${ph})`).run(now, ...list);
+  } else if (action === 'purge') {
+    d.prepare(`DELETE FROM clients WHERE handle IN (${ph})`).run(...list);
+  } else {
+    res.status(400).json({ error: 'unknown action' });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+/** Soft-deleted tasks and clients, for the Trash tab. */
+app.get('/api/trash', (_req, res) => {
+  const d = db();
+  const tasks = d
+    .prepare(
+      `SELECT id, title, detail, client_hint AS clientHint, status, deleted_at AS deletedAt
+       FROM tasks WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`,
+    )
+    .all();
+  const clients = d
+    .prepare(
+      `SELECT handle, name, product_need AS productNeed, deleted_at AS deletedAt
+       FROM clients WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`,
+    )
+    .all();
+  res.json({ tasks, clients });
+});
+
+/** Permanently empty the trash (tasks, clients, or both). */
+app.post('/api/trash/empty', (req, res) => {
+  const type = (req.body as { type?: string })?.type ?? 'all';
+  const d = db();
+  if (type === 'tasks' || type === 'all') d.prepare(`DELETE FROM tasks WHERE deleted_at IS NOT NULL`).run();
+  if (type === 'clients' || type === 'all') d.prepare(`DELETE FROM clients WHERE deleted_at IS NOT NULL`).run();
   res.json({ ok: true });
 });
 
@@ -149,12 +277,13 @@ app.get('/api/senders', (_req, res) => {
 
   const where =
     `WHERE m.sender IS NOT NULL AND m.sender != 'me'` +
+    ` AND m.sender NOT IN (SELECT handle FROM clients WHERE deleted_at IS NOT NULL AND handle IS NOT NULL)` +
     (filtering ? ` AND m.chat_id IN (${allowed.map(() => '?').join(',')})` : '');
   const rows = db()
     .prepare(
       `SELECT m.sender AS handle, COUNT(*) AS count, c.name AS name, c.product_need AS productNeed
        FROM messages m
-       LEFT JOIN clients c ON c.handle = m.sender
+       LEFT JOIN clients c ON c.handle = m.sender AND c.deleted_at IS NULL
        ${where}
        GROUP BY m.sender ORDER BY count DESC LIMIT 200`,
     )
@@ -318,8 +447,15 @@ app.post('/api/settings', (req, res) => {
 app.get('/api/stats', (_req, res) => {
   const d = db();
   const count = (s: string) =>
-    (d.prepare('SELECT COUNT(*) AS n FROM tasks WHERE status = ?').get(s) as { n: number }).n;
+    (
+      d
+        .prepare('SELECT COUNT(*) AS n FROM tasks WHERE status = ? AND deleted_at IS NULL')
+        .get(s) as { n: number }
+    ).n;
   const messages = (d.prepare('SELECT COUNT(*) AS n FROM messages').get() as { n: number }).n;
+  const trash =
+    (d.prepare('SELECT COUNT(*) AS n FROM tasks WHERE deleted_at IS NOT NULL').get() as { n: number }).n +
+    (d.prepare('SELECT COUNT(*) AS n FROM clients WHERE deleted_at IS NOT NULL').get() as { n: number }).n;
   res.json({
     messages,
     proposed: count('proposed'),
@@ -327,6 +463,7 @@ app.get('/api/stats', (_req, res) => {
     waiting: count('waiting'),
     done: count('done'),
     dismissed: count('dismissed'),
+    trash,
     hasApiKey: Boolean(getApiKey()),
   });
 });

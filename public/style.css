@@ -54,6 +54,25 @@ main { padding: 20px 28px 60px; }
 .hint.err { color: var(--red); }
 .muted { color: var(--muted); }
 
+/* Search + multi-select toolbar (shared across Bandeja/Tareas/Archivo/Clientes/Papelera) */
+.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.toolbar .search {
+  flex: 1; min-width: 180px; max-width: 360px; padding: 7px 11px;
+  border: 1px solid var(--line); border-radius: 8px; font-size: 14px;
+}
+.toolbar .selall { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.toolbar .selcount { color: var(--accent); font-size: 13px; font-weight: 550; }
+.toolbar .bulk { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.toolbar .bulk select, .toolbar .bulk input { padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; font-size: 13px; }
+.toolbar .bulk input[type='text'], .toolbar .bulk #tasks-bulk-client { width: 120px; }
+.toolbar .bulk .dismiss { color: var(--red); border-color: #f0c9c9; background: #fff; }
+
+/* A card with a left-edge selection checkbox. */
+.card.selectable { display: flex; align-items: flex-start; gap: 11px; }
+.card.selectable > .sel { margin-top: 3px; flex: none; width: 16px; height: 16px; cursor: pointer; }
+.card.selectable > .cardbody { flex: 1; min-width: 0; }
+.trash-h { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 18px 0 10px; }
+
 .cards { display: flex; flex-direction: column; gap: 10px; }
 .card {
   background: var(--card); border: 1px solid var(--line); border-radius: 10px;
@@ -100,13 +119,16 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .run-status { color: var(--muted); font-size: 13px; }
 
 .pipeline-grid { display: grid; grid-template-columns: 1.1fr 1.2fr 1fr; gap: 16px; }
+/* min-width:0 lets the grid tracks shrink instead of a long unbroken message
+   forcing the column wide (the runaway horizontal-scroll bug). */
+.pcol { min-width: 0; }
 .pcol h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 10px; }
-.feed { display: flex; flex-direction: column; gap: 7px; max-height: 68vh; overflow-y: auto; padding-right: 4px; }
+.feed { display: flex; flex-direction: column; gap: 7px; max-height: 68vh; overflow-y: auto; overflow-x: hidden; padding-right: 4px; min-width: 0; }
 
 .mrow { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font-size: 13px; }
 .mrow.out { background: #f3f7ff; }
 .mrow .who { color: var(--muted); font-size: 11px; display: flex; justify-content: space-between; }
-.mrow .clip { margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mrow .clip { margin-top: 2px; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .mrow .paperclip { color: var(--accent); }
 .srcbadge { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px; margin-right: 4px; letter-spacing: 0.02em; }
 .srcbadge.wa { background: #d8f3e3; color: #1c9b52; }

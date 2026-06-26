@@ -33,7 +33,7 @@ export function nameMap(): Record<string, string> {
 
   const manual: Record<string, string> = {};
   for (const r of d
-    .prepare(`SELECT handle, name FROM clients WHERE handle IS NOT NULL AND name != ''`)
+    .prepare(`SELECT handle, name FROM clients WHERE handle IS NOT NULL AND name != '' AND deleted_at IS NULL`)
     .all() as { handle: string; name: string }[]) {
     manual[r.handle] = r.name;
   }

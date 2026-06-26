@@ -55,6 +55,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
     document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('active', p.id === id));
     if (id === 'archive') loadArchive();
     if (id === 'tasks') loadTasks();
+    if (id === 'trash') loadTrash();
     if (id === 'clients') loadSenders();
     if (id === 'settings') {
       loadSettings();
@@ -74,36 +75,149 @@ async function loadStats() {
     `<span><b>${s.todo + s.waiting}</b> abiertas</span>` +
     `<span><b>${s.done}</b> hechas</span>`;
   $('#inbox-count').textContent = s.proposed;
+  if (typeof s.trash === 'number') $('#trash-pill').textContent = s.trash;
   if (!s.hasApiKey) $('#proc-status').textContent = 'No hay clave de API configurada';
 }
 
+// ---- Search + multi-select infrastructure ----
+// Every word in the query must appear somewhere in the joined fields.
+function matches(q, ...fields) {
+  if (!q || !q.trim()) return true;
+  const hay = fields.filter(Boolean).join(' ').toLowerCase();
+  return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
+}
+
+// Selection state + toolbar wiring for one panel. `key` is the panel id, and the
+// toolbar elements follow the `${key}-bulk/-selcount/-all` id convention.
+function makeSelection(key, getVisibleIds) {
+  const selected = new Set();
+  const bar = $(`#${key}-bulk`);
+  const countEl = $(`#${key}-selcount`);
+  const allBox = $(`#${key}-all`);
+  function refresh() {
+    if (bar) bar.hidden = selected.size === 0;
+    if (countEl) countEl.textContent = selected.size ? `${selected.size} seleccionada(s)` : '';
+    if (allBox) {
+      const ids = getVisibleIds();
+      allBox.checked = ids.length > 0 && ids.every((i) => selected.has(i));
+    }
+  }
+  if (allBox)
+    allBox.onchange = () => {
+      const ids = getVisibleIds();
+      if (allBox.checked) ids.forEach((i) => selected.add(i));
+      else ids.forEach((i) => selected.delete(i));
+      document.querySelectorAll(`#${key} .sel`).forEach((cb) => {
+        cb.checked = selected.has(cb.dataset.id);
+      });
+      refresh();
+    };
+  return {
+    selected,
+    bind(cb, id) {
+      cb.checked = selected.has(id);
+      cb.onchange = () => {
+        if (cb.checked) selected.add(id);
+        else selected.delete(id);
+        refresh();
+      };
+    },
+    ids: () => [...selected],
+    clear() {
+      selected.clear();
+      refresh();
+    },
+    refresh,
+  };
+}
+
+function bulkPost(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// Reload everything that a task change can affect.
+async function refreshTaskViews() {
+  await Promise.all([loadInbox(), loadTasks(), loadArchive(), loadTrash(), loadStats()]);
+}
+
+async function bulkTasks(selection, action, value) {
+  const ids = selection.ids().map(Number).filter((n) => Number.isFinite(n));
+  if (!ids.length) return;
+  if (action === 'purge' && !confirm(`¿Borrar definitivamente ${ids.length} tarea(s)? No se puede deshacer.`)) return;
+  await bulkPost('/api/tasks/bulk', { ids, action, value });
+  selection.clear();
+  await refreshTaskViews();
+}
+
+async function bulkClients(selection, action) {
+  const handles = selection.ids();
+  if (!handles.length) return;
+  if (action === 'purge' && !confirm(`¿Borrar definitivamente ${handles.length} cliente(s)? No se puede deshacer.`)) return;
+  await bulkPost('/api/clients/bulk', { handles, action });
+  selection.clear();
+  await Promise.all([loadSenders(), loadNames(), loadTrash(), loadStats()]);
+}
+
 // ---- Inbox ----
+let inboxItems = [];
+const inboxSel = makeSelection('inbox', () => filteredInbox().map((t) => String(t.id)));
+function filteredInbox() {
+  const q = $('#inbox-search').value;
+  return inboxItems.filter((t) =>
+    matches(q, t.title, t.detail, displayName(t.clientHint || t.chatName || t.sourceSender || ''), t.sourceQuote),
+  );
+}
 async function loadInbox() {
-  const items = await (await fetch('/api/inbox')).json();
+  inboxItems = await (await fetch('/api/inbox')).json();
+  inboxSel.clear();
+  renderInbox();
+}
+function renderInbox() {
   const list = $('#inbox-list');
   list.innerHTML = '';
+  const items = filteredInbox();
   if (!items.length) {
-    list.append(el('<div class="empty">Aún no hay tareas propuestas. Usa la pestaña Proceso para encontrar algunas.</div>'));
+    list.append(el(`<div class="empty">${inboxItems.length ? 'Nada coincide con la búsqueda.' : 'Aún no hay tareas propuestas. Usa la pestaña Proceso para encontrar algunas.'}</div>`));
+    inboxSel.refresh();
     return;
   }
   for (const t of items) {
     const who = displayName(t.clientHint || t.chatName || t.sourceSender || '');
-    const card = el(`<div class="card">
-      <div class="title">${esc(t.title)}</div>
-      <div class="detail">${esc(t.detail)}</div>
-      ${t.sourceQuote ? `<div class="quote">🔎 buscar ${who ? 'a ' + esc(who) : ''}: <span>"${esc(t.sourceQuote)}"</span></div>` : ''}
-      ${t.sourceBody && !t.sourceQuote ? `<div class="src">${t.hasAttachment ? '📎 ' : ''}${esc(t.sourceBody.slice(0, 160))}</div>` : ''}
-      <div class="meta">${who ? `<span>cliente: ${esc(who)}</span>` : ''}</div>
-      <div class="actions">
-        <button class="approve">✓ Aprobar</button>
-        <button class="dismiss">✕ Descartar</button>
+    const card = el(`<div class="card selectable">
+      <input type="checkbox" class="sel" data-id="${t.id}" />
+      <div class="cardbody">
+        <div class="title">${esc(t.title)}</div>
+        <div class="detail">${esc(t.detail)}</div>
+        ${t.sourceQuote ? `<div class="quote">🔎 buscar ${who ? 'a ' + esc(who) : ''}: <span>"${esc(t.sourceQuote)}"</span></div>` : ''}
+        ${t.sourceBody && !t.sourceQuote ? `<div class="src">${t.hasAttachment ? '📎 ' : ''}${esc(t.sourceBody.slice(0, 160))}</div>` : ''}
+        <div class="meta">${who ? `<span>cliente: ${esc(who)}</span>` : ''}</div>
+        <div class="actions">
+          <button class="approve j-approve">✓ Aprobar</button>
+          <button class="dismiss j-dismiss">✕ Descartar</button>
+          <button class="dismiss j-del" title="Eliminar">🗑</button>
+        </div>
       </div>
     </div>`);
-    card.querySelector('.approve').onclick = () => setStatus(t.id, 'todo');
-    card.querySelector('.dismiss').onclick = () => setStatus(t.id, 'dismissed');
+    inboxSel.bind(card.querySelector('.sel'), String(t.id));
+    card.querySelector('.j-approve').onclick = () => setStatus(t.id, 'todo');
+    card.querySelector('.j-dismiss').onclick = () => setStatus(t.id, 'dismissed');
+    card.querySelector('.j-del').onclick = () => deleteTask(t.id);
     list.append(card);
   }
+  inboxSel.refresh();
 }
+async function deleteTask(id) {
+  await bulkPost('/api/tasks/bulk', { ids: [Number(id)], action: 'delete' });
+  await refreshTaskViews();
+}
+$('#inbox-search').addEventListener('input', renderInbox);
+$('#inbox-bulk-approve').onclick = () => bulkTasks(inboxSel, 'status', 'todo');
+$('#inbox-bulk-dismiss').onclick = () => bulkTasks(inboxSel, 'status', 'dismissed');
+$('#inbox-bulk-delete').onclick = () => bulkTasks(inboxSel, 'delete');
 
 async function setStatus(id, status) {
   await fetch(`/api/tasks/${id}/status`, {
@@ -144,36 +258,70 @@ async function setDue(id, value) {
   await loadTasks();
 }
 
+let tasksItems = [];
+const tasksSel = makeSelection('tasks', () => filteredTasks().map((t) => String(t.id)));
+function filteredTasks() {
+  const q = $('#tasks-search').value;
+  return tasksItems.filter((t) => matches(q, t.title, t.detail, displayName(t.clientHint || ''), t.sourceQuote));
+}
 async function loadTasks() {
-  const items = await (await fetch('/api/tasks')).json();
+  tasksItems = await (await fetch('/api/tasks')).json();
+  tasksSel.clear();
+  renderTasks();
+}
+function renderTasks() {
   for (const id of STATUSES) $(`#col-${id}`).innerHTML = '';
   const counts = { todo: 0, waiting: 0, done: 0 };
-  for (const t of items) {
+  for (const t of filteredTasks()) {
     counts[t.status]++;
     const options = STATUSES.map(
       (s) => `<option value="${s}" ${s === t.status ? 'selected' : ''}>${statusLabel(s)}</option>`,
     ).join('');
     const overdue = t.dueAt && t.dueAt < Date.now() && t.status !== 'done';
-    const card = el(`<div class="card">
-      <div class="title">${esc(t.title)}</div>
-      <div class="detail">${esc(t.detail)}</div>
-      ${t.sourceQuote ? `<div class="quote">🔎 "${esc(t.sourceQuote)}"</div>` : ''}
-      <div class="meta">
-        ${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}
-        <label class="due ${overdue ? 'overdue' : ''}">vence <input type="date" class="duedate" value="${dateInput(t.dueAt)}" /></label>
-      </div>
-      <div class="actions">
-        <select class="status">${options}</select>
-        <button class="dismiss archivebtn">Archivar</button>
+    const card = el(`<div class="card selectable">
+      <input type="checkbox" class="sel" data-id="${t.id}" />
+      <div class="cardbody">
+        <div class="title">${esc(t.title)}</div>
+        <div class="detail">${esc(t.detail)}</div>
+        ${t.sourceQuote ? `<div class="quote">🔎 "${esc(t.sourceQuote)}"</div>` : ''}
+        <div class="meta">
+          ${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}
+          <label class="due ${overdue ? 'overdue' : ''}">vence <input type="date" class="duedate" value="${dateInput(t.dueAt)}" /></label>
+        </div>
+        <div class="actions">
+          <select class="status">${options}</select>
+          <button class="dismiss archivebtn">Archivar</button>
+          <button class="dismiss j-del" title="Eliminar">🗑</button>
+        </div>
       </div>
     </div>`);
+    tasksSel.bind(card.querySelector('.sel'), String(t.id));
     card.querySelector('.status').onchange = (e) => setStatus(t.id, e.target.value);
     card.querySelector('.duedate').onchange = (e) => setDue(t.id, e.target.value);
     card.querySelector('.archivebtn').onclick = () => archiveTask(t.id);
+    card.querySelector('.j-del').onclick = () => deleteTask(t.id);
     $(`#col-${t.status}`).append(card);
   }
   for (const id of STATUSES) if (!counts[id]) $(`#col-${id}`).append(el('<div class="empty">—</div>'));
+  tasksSel.refresh();
 }
+$('#tasks-search').addEventListener('input', renderTasks);
+$('#tasks-bulk-status').onchange = (e) => {
+  const v = e.target.value;
+  if (v) { e.target.value = ''; bulkTasks(tasksSel, 'status', v); }
+};
+$('#tasks-bulk-due').onchange = (e) => {
+  const v = e.target.value;
+  e.target.value = '';
+  bulkTasks(tasksSel, 'due', v ? new Date(v + 'T23:59:59').getTime() : null);
+};
+$('#tasks-bulk-setclient').onclick = () => {
+  const v = $('#tasks-bulk-client').value.trim();
+  $('#tasks-bulk-client').value = '';
+  bulkTasks(tasksSel, 'client', v);
+};
+$('#tasks-bulk-archive').onclick = () => bulkTasks(tasksSel, 'archive');
+$('#tasks-bulk-delete').onclick = () => bulkTasks(tasksSel, 'delete');
 
 // ---- New task ----
 $('#new-task').addEventListener('submit', async (e) => {
@@ -192,25 +340,49 @@ $('#new-task').addEventListener('submit', async (e) => {
 });
 
 // ---- Archive ----
+let archiveItems = [];
+const archiveSel = makeSelection('archive', () => filteredArchive().map((t) => String(t.id)));
+function filteredArchive() {
+  const q = $('#archive-search').value;
+  return archiveItems.filter((t) => matches(q, t.title, t.detail, displayName(t.clientHint || '')));
+}
 async function loadArchive() {
-  const items = await (await fetch('/api/archive')).json();
+  archiveItems = await (await fetch('/api/archive')).json();
+  archiveSel.clear();
+  renderArchive();
+}
+function renderArchive() {
   const list = $('#archive-list');
   list.innerHTML = '';
+  const items = filteredArchive();
   if (!items.length) {
-    list.append(el('<div class="empty">No hay nada archivado todavía.</div>'));
+    list.append(el(`<div class="empty">${archiveItems.length ? 'Nada coincide con la búsqueda.' : 'No hay nada archivado todavía.'}</div>`));
+    archiveSel.refresh();
     return;
   }
   for (const t of items) {
-    const card = el(`<div class="card">
-      <div class="title">${esc(t.title)}</div>
-      <div class="detail">${esc(t.detail)}</div>
-      <div class="meta"><span class="badge b-done">${esc(statusLabel(t.status))}</span>${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}</div>
-      <div class="actions"><button class="approve">↩ Desarchivar</button></div>
+    const card = el(`<div class="card selectable">
+      <input type="checkbox" class="sel" data-id="${t.id}" />
+      <div class="cardbody">
+        <div class="title">${esc(t.title)}</div>
+        <div class="detail">${esc(t.detail)}</div>
+        <div class="meta"><span class="badge b-done">${esc(statusLabel(t.status))}</span>${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}</div>
+        <div class="actions">
+          <button class="approve j-unarchive">↩ Desarchivar</button>
+          <button class="dismiss j-del" title="Eliminar">🗑</button>
+        </div>
+      </div>
     </div>`);
-    card.querySelector('.approve').onclick = () => archiveTask(t.id, true);
+    archiveSel.bind(card.querySelector('.sel'), String(t.id));
+    card.querySelector('.j-unarchive').onclick = () => archiveTask(t.id, true);
+    card.querySelector('.j-del').onclick = () => deleteTask(t.id);
     list.append(card);
   }
+  archiveSel.refresh();
 }
+$('#archive-search').addEventListener('input', renderArchive);
+$('#archive-bulk-unarchive').onclick = () => bulkTasks(archiveSel, 'unarchive');
+$('#archive-bulk-delete').onclick = () => bulkTasks(archiveSel, 'delete');
 
 // ---- Pipeline: shared rendering ----
 function resetFeeds() {
@@ -308,17 +480,30 @@ $('#backfill').addEventListener('click', async () => {
 });
 
 // ---- Clients / senders ----
+let sendersItems = [];
+const clientsSel = makeSelection('clients', () => filteredSenders().map((s) => s.handle));
+function filteredSenders() {
+  const q = $('#clients-search').value;
+  return sendersItems.filter((s) => matches(q, s.handle, s.displayName, s.name, s.productNeed));
+}
 async function loadSenders() {
-  const items = await (await fetch('/api/senders')).json();
+  sendersItems = await (await fetch('/api/senders')).json();
+  clientsSel.clear();
+  renderSenders();
+}
+function renderSenders() {
   const list = $('#senders-list');
   list.innerHTML = '';
+  const items = filteredSenders();
   if (!items.length) {
-    list.append(el('<div class="empty">Aún no hay remitentes — primero importa algunos mensajes.</div>'));
+    list.append(el(`<div class="empty">${sendersItems.length ? 'Nada coincide con la búsqueda.' : 'Aún no hay remitentes — primero importa algunos mensajes.'}</div>`));
+    clientsSel.refresh();
     return;
   }
   for (const s of items) {
     const resolved = s.displayName && s.displayName !== s.handle ? s.displayName : '';
     const card = el(`<div class="card sender">
+      <input type="checkbox" class="sel" data-id="${esc(s.handle)}" />
       <span class="handle">${esc(s.handle)}</span>
       ${resolved ? `<span class="rn">${esc(resolved)}</span>` : '<span class="rn unnamed">sin nombre</span>'}
       <span class="count">${s.count} msjs</span>
@@ -327,6 +512,7 @@ async function loadSenders() {
       <button class="approve save">Guardar</button>
       <span class="saved"></span>
     </div>`);
+    clientsSel.bind(card.querySelector('.sel'), s.handle);
     card.querySelector('.save').onclick = async () => {
       const name = card.querySelector('.nm').value.trim();
       if (!name) return;
@@ -342,7 +528,81 @@ async function loadSenders() {
     };
     list.append(card);
   }
+  clientsSel.refresh();
 }
+$('#clients-search').addEventListener('input', renderSenders);
+$('#clients-bulk-delete').onclick = () => bulkClients(clientsSel, 'delete');
+
+// ---- Trash ----
+let trashData = { tasks: [], clients: [] };
+async function loadTrash() {
+  trashData = await (await fetch('/api/trash')).json();
+  $('#trash-pill').textContent = trashData.tasks.length + trashData.clients.length;
+  renderTrash();
+}
+function renderTrash() {
+  const q = $('#trash-search').value;
+  const tk = trashData.tasks.filter((t) => matches(q, t.title, t.detail, displayName(t.clientHint || '')));
+  const cl = trashData.clients.filter((c) => matches(q, c.handle, c.name, displayName(c.handle)));
+  $('#trash-task-count').textContent = tk.length;
+  $('#trash-client-count').textContent = cl.length;
+
+  const tl = $('#trash-tasks');
+  tl.innerHTML = '';
+  if (!tk.length) tl.append(el('<div class="empty">—</div>'));
+  for (const t of tk) {
+    const card = el(`<div class="card">
+      <div class="title">${esc(t.title)}</div>
+      <div class="detail">${esc(t.detail)}</div>
+      <div class="meta">${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}<span class="badge">${esc(statusLabel(t.status))}</span></div>
+      <div class="actions">
+        <button class="approve j-restore">↩ Restaurar</button>
+        <button class="dismiss j-purge">Borrar definitivamente</button>
+      </div>
+    </div>`);
+    card.querySelector('.j-restore').onclick = async () => {
+      await bulkPost('/api/tasks/bulk', { ids: [Number(t.id)], action: 'restore' });
+      await refreshTaskViews();
+    };
+    card.querySelector('.j-purge').onclick = async () => {
+      if (!confirm('¿Borrar definitivamente esta tarea? No se puede deshacer.')) return;
+      await bulkPost('/api/tasks/bulk', { ids: [Number(t.id)], action: 'purge' });
+      await refreshTaskViews();
+    };
+    tl.append(card);
+  }
+
+  const cle = $('#trash-clients');
+  cle.innerHTML = '';
+  if (!cl.length) cle.append(el('<div class="empty">—</div>'));
+  for (const c of cl) {
+    const nm = c.name || displayName(c.handle) || c.handle;
+    const card = el(`<div class="card sender">
+      <span class="handle">${esc(c.handle)}</span>
+      <span class="rn">${esc(nm)}</span>
+      <span class="actions" style="margin-left:auto">
+        <button class="approve j-restore">↩ Restaurar</button>
+        <button class="dismiss j-purge">Borrar definitivamente</button>
+      </span>
+    </div>`);
+    card.querySelector('.j-restore').onclick = async () => {
+      await bulkPost('/api/clients/bulk', { handles: [c.handle], action: 'restore' });
+      await Promise.all([loadSenders(), loadNames(), loadTrash(), loadStats()]);
+    };
+    card.querySelector('.j-purge').onclick = async () => {
+      if (!confirm('¿Borrar definitivamente este cliente? No se puede deshacer.')) return;
+      await bulkPost('/api/clients/bulk', { handles: [c.handle], action: 'purge' });
+      await Promise.all([loadSenders(), loadNames(), loadTrash(), loadStats()]);
+    };
+    cle.append(card);
+  }
+}
+$('#trash-search').addEventListener('input', renderTrash);
+$('#trash-empty').onclick = async () => {
+  if (!confirm('¿Vaciar la papelera? Se borrarán definitivamente todos los elementos eliminados.')) return;
+  await bulkPost('/api/trash/empty', { type: 'all' });
+  await Promise.all([loadTrash(), loadSenders(), loadNames(), loadStats()]);
+};
 
 // ---- Chat ----
 const chatHistory = [];

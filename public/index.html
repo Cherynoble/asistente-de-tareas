@@ -16,6 +16,7 @@
       <button class="tab active" data-tab="inbox">Bandeja <span id="inbox-count" class="pill">0</span></button>
       <button class="tab" data-tab="tasks">Tareas</button>
       <button class="tab" data-tab="archive">Archivo</button>
+      <button class="tab" data-tab="trash">Papelera <span id="trash-pill" class="pill">0</span></button>
       <button class="tab" data-tab="clients">Clientes</button>
       <button class="tab" data-tab="chat">Chat</button>
       <button class="tab" data-tab="pipeline">Proceso</button>
@@ -26,6 +27,16 @@
       <!-- BANDEJA -->
       <section id="inbox" class="panel active">
         <p class="hint">Tareas propuestas por la IA a partir de tus mensajes. Apruébalas para agregarlas a tu lista, o descártalas.</p>
+        <div class="toolbar">
+          <input class="search" id="inbox-search" placeholder="Buscar tareas, cliente, texto…" />
+          <label class="selall"><input type="checkbox" id="inbox-all" /> sel. todo</label>
+          <span id="inbox-selcount" class="selcount"></span>
+          <span class="bulk" id="inbox-bulk" hidden>
+            <button class="approve" id="inbox-bulk-approve">✓ Aprobar</button>
+            <button id="inbox-bulk-dismiss">Descartar</button>
+            <button class="dismiss" id="inbox-bulk-delete">🗑 Eliminar</button>
+          </span>
+        </div>
         <div id="inbox-list" class="cards"></div>
       </section>
 
@@ -37,6 +48,24 @@
           <input id="nt-client" placeholder="cliente (opcional)" />
           <button class="primary" type="submit">Agregar</button>
         </form>
+        <div class="toolbar">
+          <input class="search" id="tasks-search" placeholder="Buscar tareas, cliente, texto…" />
+          <label class="selall"><input type="checkbox" id="tasks-all" /> sel. todo</label>
+          <span id="tasks-selcount" class="selcount"></span>
+          <span class="bulk" id="tasks-bulk" hidden>
+            <select id="tasks-bulk-status">
+              <option value="">cambiar estado…</option>
+              <option value="todo">por hacer</option>
+              <option value="waiting">en espera</option>
+              <option value="done">hecho</option>
+            </select>
+            <input type="date" id="tasks-bulk-due" title="asignar fecha" />
+            <input id="tasks-bulk-client" placeholder="cliente…" />
+            <button id="tasks-bulk-setclient">Asignar</button>
+            <button id="tasks-bulk-archive">Archivar</button>
+            <button class="dismiss" id="tasks-bulk-delete">🗑 Eliminar</button>
+          </span>
+        </div>
         <div class="cols">
           <div class="col"><h3>Por hacer</h3><div id="col-todo" class="cards"></div></div>
           <div class="col"><h3>En espera</h3><div id="col-waiting" class="cards"></div></div>
@@ -47,12 +76,42 @@
       <!-- ARCHIVO -->
       <section id="archive" class="panel">
         <p class="hint">Tareas completadas que archivaste. Desarchiva para recuperar una.</p>
+        <div class="toolbar">
+          <input class="search" id="archive-search" placeholder="Buscar…" />
+          <label class="selall"><input type="checkbox" id="archive-all" /> sel. todo</label>
+          <span id="archive-selcount" class="selcount"></span>
+          <span class="bulk" id="archive-bulk" hidden>
+            <button id="archive-bulk-unarchive">↩ Desarchivar</button>
+            <button class="dismiss" id="archive-bulk-delete">🗑 Eliminar</button>
+          </span>
+        </div>
         <div id="archive-list" class="cards"></div>
+      </section>
+
+      <!-- PAPELERA -->
+      <section id="trash" class="panel">
+        <p class="hint">Elementos eliminados. Restaura para recuperarlos, o vacíalos para borrarlos definitivamente.</p>
+        <div class="toolbar">
+          <input class="search" id="trash-search" placeholder="Buscar…" />
+          <button class="dismiss" id="trash-empty">Vaciar papelera</button>
+        </div>
+        <h3 class="trash-h">Tareas eliminadas <span id="trash-task-count" class="pill">0</span></h3>
+        <div id="trash-tasks" class="cards"></div>
+        <h3 class="trash-h">Clientes eliminados <span id="trash-client-count" class="pill">0</span></h3>
+        <div id="trash-clients" class="cards"></div>
       </section>
 
       <!-- CLIENTES -->
       <section id="clients" class="panel">
         <p class="hint">Ponle nombre a tus contactos para ver nombres reales en vez de números. La nota "qué compran" se usa como contexto para la IA.</p>
+        <div class="toolbar">
+          <input class="search" id="clients-search" placeholder="Buscar por nombre o número…" />
+          <label class="selall"><input type="checkbox" id="clients-all" /> sel. todo</label>
+          <span id="clients-selcount" class="selcount"></span>
+          <span class="bulk" id="clients-bulk" hidden>
+            <button class="dismiss" id="clients-bulk-delete">🗑 Eliminar</button>
+          </span>
+        </div>
         <div id="senders-list" class="cards"></div>
       </section>
 
