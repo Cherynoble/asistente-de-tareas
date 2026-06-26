@@ -9,7 +9,30 @@ AI to propose tasks, tracks their progress, and sends reminders until they're do
 
 Single user: the father. He reviews/uses it on his Mac.
 
-## 🔖 HANDOFF STATE (2026-06-25) — read this first
+## 🔖 NEW PHASE (2026-06-26) — version control + new features — read this first
+We moved past "feature-complete" into adding features, with proper infra:
+- **Git + GitHub:** repo at https://github.com/Cherynoble/asistente-de-tareas (public,
+  owner `Cherynoble`). `.gitignore` excludes `.env`, `data/`, `dist/`, `.wwebjs_*`,
+  `.claude/settings.local.json`. **Iterate with `npm run dashboard`; only run `npm run
+  dist` to deliver a new native shell.**
+- **Option B online updates (DONE & validated):** the packaged app runs `dist/`+`public/`
+  from a writable external dir `~/Library/Application Support/DadsApp/app/` (seeded from
+  the bundle, `node_modules` symlinked to the bundle). `package.json build.asar:false`.
+  A code update is a **GitHub Release** (`npm run release -- "notas"` → zip + manifest);
+  the in-app updater (`electron/updater.cjs` + `preload.cjs`, "Buscar actualizaciones" in
+  Ajustes / app menu) downloads + atomically swaps + relaunches — **no repackage, no
+  re-sign, DB untouched**. `manifest.minShellVersion` gates the rare case needing a fresh
+  `.app`. So **Dad downloads updates; you only re-AirDrop the `.app` for native/dep
+  changes** (then bump `MIN_SHELL_VERSION`). Shell + release are both 0.1.1.
+- **Names (DONE):** real contact names now resolve via `src/names.ts` `nameMap()`
+  (manual > macOS Contacts `src/ingest/contacts.ts` > captured WhatsApp pushname), served
+  through `/api/namemap` (flows everywhere). Contacts read needs FDA (degrades gracefully).
+  `Clientes`/`/api/senders` is limited to chats selected in Ajustes (per-source, empty=all).
+- **In flight (owner-approved):** search+multiselect across tabs, pipeline wrap fix,
+  mass-delete + Trash tab, chat memory/threads + AI-scheduled reminders + morning digest,
+  AI task creation from chat, file upload to chat. See the conversation/commits.
+
+## 🔖 HANDOFF STATE (2026-06-25) — earlier baseline
 The app is **feature-complete and bundled**; we're in the final "iron out kinks" phase.
 - **Deliverable:** signed, unsigned-but-ad-hoc `.app` at
   `/Users/cherynoble/dadsapp-release/mac-arm64/Asistente de Tareas.app`. Rebuild with
