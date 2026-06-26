@@ -898,14 +898,28 @@ async function loadChats() {
     : 'Sin selección — se incluyen todos los chats. Marca algunos para limitar.';
   list.innerHTML = '';
   for (const c of data.chats) {
-    const row = el(`<label class="chatrow">
+    const name = c.displayName || c.name;
+    const showId = name && name !== c.id;
+    list.append(
+      el(`<label class="chatrow" data-name="${esc((name + ' ' + c.id).toLowerCase())}">
       <input type="checkbox" value="${esc(c.id)}" ${c.selected ? 'checked' : ''} />
-      <span class="cn">${esc(c.name)}</span>
+      <span class="cn">${esc(name)}${showId ? ` <span class="cid">${esc(c.id)}</span>` : ''}</span>
       <span class="ct">${c.isGroup ? 'grupo' : 'directo'} · ${c.count}</span>
-    </label>`);
-    list.append(row);
+    </label>`),
+    );
   }
+  filterChatRows('#chats-list', $('#chats-search').value);
 }
+
+// Filter chat rows by hiding (not removing) so checkbox selections survive search.
+function filterChatRows(listSel, q) {
+  q = (q || '').toLowerCase().trim();
+  document.querySelectorAll(`${listSel} .chatrow`).forEach((row) => {
+    row.style.display = !q || (row.dataset.name || '').includes(q) ? '' : 'none';
+  });
+}
+$('#chats-search').addEventListener('input', (e) => filterChatRows('#chats-list', e.target.value));
+$('#wachats-search').addEventListener('input', (e) => filterChatRows('#wachats-list', e.target.value));
 
 async function saveChatSelection(ids) {
   await fetch('/api/settings', {
@@ -944,14 +958,17 @@ async function loadWaChats() {
     : 'Sin selección — se incluyen todos los chats. Marca algunos para limitar.';
   list.innerHTML = '';
   for (const c of data.chats) {
+    const name = c.displayName || c.name;
+    const showId = name && name !== c.id;
     list.append(
-      el(`<label class="chatrow">
+      el(`<label class="chatrow" data-name="${esc((name + ' ' + c.id).toLowerCase())}">
         <input type="checkbox" value="${esc(c.id)}" ${c.selected ? 'checked' : ''} />
-        <span class="cn">${esc(c.name)}</span>
+        <span class="cn">${esc(name)}${showId ? ` <span class="cid">${esc(c.id)}</span>` : ''}</span>
         <span class="ct">${c.isGroup ? 'grupo' : 'directo'}</span>
       </label>`),
     );
   }
+  filterChatRows('#wachats-list', $('#wachats-search').value);
 }
 
 async function saveWaChatSelection(ids) {

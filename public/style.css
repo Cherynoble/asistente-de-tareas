@@ -210,7 +210,12 @@ select.status { padding: 5px 8px; border: 1px solid var(--line); border-radius: 
 .chatrow { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
 .chatrow:hover { background: #f3f6fb; }
 .chatrow .cn { flex: 1; }
+.chatrow .cid { color: var(--muted); font-size: 12px; margin-left: 6px; }
 .chatrow .ct { color: var(--muted); font-size: 12px; }
+#chats-search, #wachats-search {
+  width: 100%; padding: 7px 10px; border: 1px solid var(--line);
+  border-radius: 7px; font-size: 13px; margin: 4px 0 8px;
+}
 
 /* Narrow screens (phone / split window): stack everything. */
 @media (max-width: 900px) {

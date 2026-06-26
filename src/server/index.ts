@@ -32,6 +32,7 @@ import {
   deleteMemory,
 } from '../chat/store.js';
 import { nameMap } from '../names.js';
+import { resolveContactName } from '../ingest/contacts.js';
 import { macNotify } from '../notify/mac.js';
 import {
   buildDigest,
@@ -440,7 +441,12 @@ app.get('/api/whatsapp/chats', async (_req, res) => {
   }
   try {
     const selected = new Set(getSelectedWaChats());
-    const chats = (await listWaChats()).map((c) => ({ ...c, selected: selected.has(c.id) }));
+    const names = nameMap();
+    const chats = (await listWaChats()).map((c) => ({
+      ...c,
+      selected: selected.has(c.id),
+      displayName: names[c.id] || c.name || resolveContactName(c.id) || c.id,
+    }));
     res.json({ chats, filtering: selected.size > 0, ready: true });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -451,7 +457,12 @@ app.get('/api/whatsapp/chats', async (_req, res) => {
 app.get('/api/chats', (_req, res) => {
   try {
     const selected = new Set(getSelectedChats());
-    const chats = listChats().map((c) => ({ ...c, selected: selected.has(c.id) }));
+    const names = nameMap();
+    const chats = listChats().map((c) => ({
+      ...c,
+      selected: selected.has(c.id),
+      displayName: c.isGroup ? c.name : names[c.id] || resolveContactName(c.id) || c.name,
+    }));
     res.json({ chats, filtering: selected.size > 0 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
