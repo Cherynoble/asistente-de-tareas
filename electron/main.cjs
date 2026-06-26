@@ -2,14 +2,95 @@
 // Disk Access granted to this .app applies to its chat.db reads) and opens a
 // window pointing at the local dashboard. Written as .cjs so it loads as
 // CommonJS even though the project is "type": "module".
+//
+// OPTION B — hot-updatable code: in a packaged build we run the app's JS
+// (dist/ + public/) from a WRITABLE external folder
+// (~/Library/Application Support/DadsApp/app/) instead of from inside the
+// read-only bundle. On launch we seed that folder from the bundle if it's
+// missing or older, and symlink its node_modules to the bundle's, so an online
+// update only has to drop new dist/+public/ files there — no repackaging, no
+// re-signing, and the database (one level up, in DadsApp/) is never touched.
 const { app, BrowserWindow, shell, dialog, Menu } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
 const http = require('node:http');
+const { pathToFileURL } = require('node:url');
 
 const PORT = process.env.PORT || '4319';
+const BUNDLE_ROOT = path.join(__dirname, '..'); // .../Resources/app (or project root in dev)
+// The external code dir lives INSIDE DadsApp/app; the DB/session stay at DadsApp/ (one level up).
+const EXTERNAL_ROOT = path.join(app.getPath('appData'), 'DadsApp', 'app');
+
 let win = null;
 let waClient = null; // whatsapp client module, kept for graceful shutdown
 let quitting = false;
+
+function readJson(p) {
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** Compare dotted versions: returns true if a < b. */
+function versionLt(a, b) {
+  const pa = String(a || '0').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '0').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0;
+    const y = pb[i] || 0;
+    if (x !== y) return x < y;
+  }
+  return false;
+}
+
+/** Point EXTERNAL_ROOT/node_modules at the CURRENT bundle's node_modules. */
+function ensureNodeModulesLink() {
+  const target = path.join(BUNDLE_ROOT, 'node_modules');
+  const link = path.join(EXTERNAL_ROOT, 'node_modules');
+  try {
+    const st = fs.lstatSync(link);
+    if (st.isSymbolicLink() && fs.readlinkSync(link) === target) return; // already correct
+    fs.rmSync(link, { recursive: true, force: true });
+  } catch {
+    /* link doesn't exist yet */
+  }
+  fs.symlinkSync(target, link, 'dir');
+}
+
+/**
+ * Make sure EXTERNAL_ROOT holds runnable code at least as new as the bundle,
+ * then return the directory to load the app from. In dev (unpackaged) we just
+ * run straight from the project so live edits aren't shadowed by a stale copy.
+ */
+function resolveCodeRoot() {
+  if (!app.isPackaged) return BUNDLE_ROOT;
+
+  const bundledVersion = (readJson(path.join(BUNDLE_ROOT, 'package.json')) || {}).version || '0';
+  const ext = readJson(path.join(EXTERNAL_ROOT, 'code-version.json'));
+  const externalVersion = ext && ext.version;
+  const hasCode = fs.existsSync(path.join(EXTERNAL_ROOT, 'dist', 'server', 'index.js'));
+
+  // Seed/refresh from the bundle when the external copy is missing or older than
+  // the shell we just launched (a freshly installed .app carries newer code).
+  if (!hasCode || !externalVersion || versionLt(externalVersion, bundledVersion)) {
+    fs.mkdirSync(EXTERNAL_ROOT, { recursive: true });
+    for (const dir of ['dist', 'public']) {
+      const dest = path.join(EXTERNAL_ROOT, dir);
+      fs.rmSync(dest, { recursive: true, force: true });
+      fs.cpSync(path.join(BUNDLE_ROOT, dir), dest, { recursive: true });
+    }
+    fs.copyFileSync(path.join(BUNDLE_ROOT, 'package.json'), path.join(EXTERNAL_ROOT, 'package.json'));
+    fs.writeFileSync(
+      path.join(EXTERNAL_ROOT, 'code-version.json'),
+      JSON.stringify({ version: bundledVersion, seededFrom: 'bundle', at: Date.now() }, null, 2),
+    );
+  }
+
+  ensureNodeModulesLink();
+  return EXTERNAL_ROOT;
+}
 
 /** Poll the server until it answers, so we don't load a blank page. */
 function waitForServer(timeoutMs = 30000) {
@@ -30,9 +111,12 @@ function waitForServer(timeoutMs = 30000) {
 }
 
 async function boot() {
+  const codeRoot = resolveCodeRoot();
   // dist/ is the compiled (ESM) server — import() loads it and it auto-listens.
-  await import(path.join(__dirname, '..', 'dist', 'server', 'index.js'));
-  waClient = await import(path.join(__dirname, '..', 'dist', 'ingest', 'whatsapp', 'client.js'));
+  await import(pathToFileURL(path.join(codeRoot, 'dist', 'server', 'index.js')).href);
+  waClient = await import(
+    pathToFileURL(path.join(codeRoot, 'dist', 'ingest', 'whatsapp', 'client.js')).href
+  );
 }
 
 function createWindow() {

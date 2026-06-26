@@ -27,16 +27,12 @@
     "appId": "com.dadsapp.asistente",
     "productName": "Asistente de Tareas",
     "npmRebuild": false,
+    "asar": false,
     "files": [
       "dist/**/*",
       "public/**/*",
       "electron/**/*",
       "package.json"
-    ],
-    "asarUnpack": [
-      "node_modules/better-sqlite3/**",
-      "node_modules/bindings/**",
-      "node_modules/file-uri-to-path/**"
     ],
     "mac": {
       "category": "public.app-category.productivity",
