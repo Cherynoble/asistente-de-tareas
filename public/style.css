@@ -204,6 +204,9 @@ select.status { padding: 5px 8px; border: 1px solid var(--line); border-radius: 
 
 /* Modal overlay (launch digest) */
 .overlay { position: fixed; inset: 0; background: rgba(20,30,50,0.45); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+/* The class sets display:flex, which would override the `hidden` attribute —
+   this makes hidden win again so the modal can actually close. */
+.overlay[hidden] { display: none; }
 .modal { background: var(--card); border-radius: 14px; padding: 22px 24px; max-width: 520px; width: 100%; max-height: 80vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(20,30,50,0.25); }
 .modal h2 { margin: 0 0 14px; font-size: 19px; }
 .modal .dsec { margin-bottom: 14px; }

@@ -81,11 +81,26 @@ async function loadStats() {
 }
 
 // ---- Search + multi-select infrastructure ----
+// Spanish↔English month names normalize to the same token so "junio" finds "June".
+const MONTH_SETS = [
+  ['enero', 'january'], ['febrero', 'february'], ['marzo', 'march'], ['abril', 'april'],
+  ['mayo', 'may'], ['junio', 'june'], ['julio', 'july'], ['agosto', 'august'],
+  ['septiembre', 'setiembre', 'september'], ['octubre', 'october'],
+  ['noviembre', 'november'], ['diciembre', 'december'],
+];
+function normMonths(s) {
+  let out = s;
+  MONTH_SETS.forEach((names, i) => {
+    const tok = 'mes' + String(i + 1).padStart(2, '0');
+    for (const n of names) out = out.replace(new RegExp('\\b' + n + '\\b', 'g'), tok);
+  });
+  return out;
+}
 // Every word in the query must appear somewhere in the joined fields.
 function matches(q, ...fields) {
   if (!q || !q.trim()) return true;
-  const hay = fields.filter(Boolean).join(' ').toLowerCase();
-  return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
+  const hay = normMonths(fields.filter(Boolean).join(' ').toLowerCase());
+  return normMonths(q.toLowerCase()).split(/\s+/).every((w) => hay.includes(w));
 }
 
 // Selection state + toolbar wiring for one panel. `key` is the panel id, and the
@@ -798,29 +813,48 @@ $('#show-reminders').onclick = () => {
 $('#close-reminders').onclick = showChatView;
 
 // ---- Launch digest ("Buenos días") ----
+function sameDay(a, b) {
+  const x = new Date(a);
+  const y = new Date(b);
+  return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+}
 async function checkDigest() {
   try {
     const d = await (await fetch('/api/digest')).json();
-    if (!d.newTasks.length && !d.reminders.length) return;
+    const newTasks = d.newTasks || [];
+    const reminders = d.reminders || [];
+    const hasContent = newTasks.length || reminders.length;
+    const greetedToday = d.lastSeen && sameDay(d.lastSeen, Date.now());
+    // Nothing new and we already said hello today → don't pop up again.
+    if (!hasContent && greetedToday) return;
+
     const body = $('#digest-body');
     body.innerHTML = '';
-    if (d.reminders.length) {
+    if (reminders.length) {
       const sec = el('<div class="dsec"><h4>⏰ Recordatorios</h4></div>');
-      for (const r of d.reminders)
+      for (const r of reminders)
         sec.append(el(`<div class="ditem"><div class="dt">${esc(r.text)}</div><div class="dd">${esc(new Date(r.dueAt).toLocaleString('es'))}</div></div>`));
       body.append(sec);
     }
-    if (d.newTasks.length) {
-      const sec = el(`<div class="dsec"><h4>🆕 Tareas propuestas nuevas (${d.newTasks.length})</h4></div>`);
-      for (const t of d.newTasks)
+    if (newTasks.length) {
+      const sec = el(`<div class="dsec"><h4>🆕 Tareas propuestas nuevas (${newTasks.length})</h4></div>`);
+      for (const t of newTasks)
         sec.append(el(`<div class="ditem"><div class="dt">${esc(t.title)}</div>${t.clientHint ? `<div class="dd">cliente: ${esc(displayName(t.clientHint))}</div>` : ''}</div>`));
       body.append(sec);
     }
-    $('#digest-overlay').hidden = false;
+    if (!hasContent) {
+      body.append(
+        el('<div class="dsec"><div class="ditem"><div class="dt">Todo al día 🎉</div><div class="dd">No hay tareas nuevas ni recordatorios pendientes. ¡Que tengas un buen día!</div></div></div>'),
+      );
+    }
+    const ov = $('#digest-overlay');
+    ov.hidden = false;
+    ov.style.display = 'flex';
     $('#digest-ok').onclick = async () => {
-      $('#digest-overlay').hidden = true;
+      ov.hidden = true;
+      ov.style.display = 'none';
       await fetch('/api/digest/seen', { method: 'POST' });
-      for (const r of d.reminders) fetch(`/api/agenda/${r.id}/dismiss`, { method: 'POST' });
+      for (const r of reminders) fetch(`/api/agenda/${r.id}/dismiss`, { method: 'POST' });
       loadReminders();
     };
   } catch {
