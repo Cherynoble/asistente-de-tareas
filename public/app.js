@@ -317,10 +317,12 @@ async function loadSenders() {
     return;
   }
   for (const s of items) {
+    const resolved = s.displayName && s.displayName !== s.handle ? s.displayName : '';
     const card = el(`<div class="card sender">
       <span class="handle">${esc(s.handle)}</span>
+      ${resolved ? `<span class="rn">${esc(resolved)}</span>` : '<span class="rn unnamed">sin nombre</span>'}
       <span class="count">${s.count} msjs</span>
-      <input class="nm" placeholder="nombre" value="${esc(s.name || '')}" />
+      <input class="nm" placeholder="${resolved ? 'cambiar nombre' : 'nombre'}" value="${esc(s.name || '')}" />
       <input class="pn" placeholder="qué compran / necesitan" value="${esc(s.productNeed || '')}" />
       <button class="approve save">Guardar</button>
       <span class="saved"></span>

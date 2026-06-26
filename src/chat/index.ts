@@ -1,6 +1,7 @@
 import { db } from '../db/index.js';
 import { config } from '../config.js';
 import { anthropicClient } from '../settings.js';
+import { nameMap } from '../names.js';
 
 export interface ChatMsg {
   role: 'user' | 'assistant';
@@ -26,8 +27,7 @@ function buildContext(): string {
     .prepare(`SELECT name, handle, product_need FROM clients`)
     .all() as { name: string; handle: string | null; product_need: string }[];
 
-  const names: Record<string, string> = {};
-  for (const c of clients) if (c.handle) names[c.handle] = c.name;
+  const names = nameMap();
 
   const recent = (
     d

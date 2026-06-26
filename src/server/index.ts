@@ -21,6 +21,7 @@ import {
   listWaChats,
 } from '../ingest/whatsapp/client.js';
 import { chat, type ChatMsg } from '../chat/index.js';
+import { nameMap } from '../names.js';
 import { macNotify } from '../notify/mac.js';
 import {
   buildDigest,
@@ -115,18 +116,57 @@ app.post('/api/tasks/:id/archive', (req, res) => {
   res.json({ ok: true });
 });
 
-/** Distinct senders (incoming) with message counts and any assigned client name. */
+/**
+ * Distinct senders with message counts, the resolved display name, and any
+ * manual client name/product-need. Limited to senders that appear in the chats
+ * selected in Settings (empty selection = all chats), so the Clientes tab only
+ * lists people the owner actually chose to track.
+ */
 app.get('/api/senders', (_req, res) => {
+  const selImsg = getSelectedChats();
+  const selWa = getSelectedWaChats();
+  const filtering = selImsg.length > 0 || selWa.length > 0;
+
+  // Which raw chat_ids are "included" given the per-source selections.
+  let allowed: string[] = [];
+  if (filtering) {
+    const chatRows = db()
+      .prepare(`SELECT DISTINCT source, chat_id FROM messages WHERE chat_id IS NOT NULL`)
+      .all() as { source: string; chat_id: string }[];
+    for (const r of chatRows) {
+      if (r.source === 'whatsapp') {
+        if (!selWa.length || selWa.includes(r.chat_id)) allowed.push(r.chat_id);
+      } else {
+        const ident = String(r.chat_id).split(';').pop() ?? r.chat_id;
+        if (!selImsg.length || selImsg.includes(ident)) allowed.push(r.chat_id);
+      }
+    }
+    if (!allowed.length) {
+      res.json([]);
+      return;
+    }
+  }
+
+  const where =
+    `WHERE m.sender IS NOT NULL AND m.sender != 'me'` +
+    (filtering ? ` AND m.chat_id IN (${allowed.map(() => '?').join(',')})` : '');
   const rows = db()
     .prepare(
       `SELECT m.sender AS handle, COUNT(*) AS count, c.name AS name, c.product_need AS productNeed
        FROM messages m
        LEFT JOIN clients c ON c.handle = m.sender
-       WHERE m.sender IS NOT NULL AND m.sender != 'me'
+       ${where}
        GROUP BY m.sender ORDER BY count DESC LIMIT 200`,
     )
-    .all();
-  res.json(rows);
+    .all(...(filtering ? allowed : [])) as {
+    handle: string;
+    count: number;
+    name: string | null;
+    productNeed: string | null;
+  }[];
+
+  const names = nameMap();
+  res.json(rows.map((r) => ({ ...r, displayName: names[r.handle] ?? null })));
 });
 
 /** Create/update a client: name + product-need for a handle. */
@@ -152,14 +192,9 @@ app.post('/api/clients', (req, res) => {
   res.json({ ok: true });
 });
 
-/** handle → display name, for showing names instead of phone numbers. */
+/** handle → display name (manual > macOS Contacts > WhatsApp pushname). */
 app.get('/api/namemap', (_req, res) => {
-  const rows = db()
-    .prepare(`SELECT handle, name FROM clients WHERE handle IS NOT NULL`)
-    .all() as { handle: string; name: string }[];
-  const map: Record<string, string> = {};
-  for (const r of rows) map[r.handle] = r.name;
-  res.json(map);
+  res.json(nameMap());
 });
 
 /** Chat with Haiku using the message/task/client database as context. */

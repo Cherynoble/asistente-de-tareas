@@ -138,6 +138,8 @@ select.status { padding: 5px 8px; border: 1px solid var(--line); border-radius: 
 /* Clients / senders */
 .sender { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .sender .handle { font-family: ui-monospace, Menlo, monospace; font-size: 13px; min-width: 150px; }
+.sender .rn { font-weight: 600; min-width: 120px; }
+.sender .rn.unnamed { font-weight: 400; color: var(--muted); font-style: italic; }
 .sender .count { color: var(--muted); font-size: 12px; min-width: 60px; }
 .sender input { padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; font-size: 13px; }
 .sender .nm { width: 150px; }
