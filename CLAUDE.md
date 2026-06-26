@@ -28,9 +28,18 @@ We moved past "feature-complete" into adding features, with proper infra:
   (manual > macOS Contacts `src/ingest/contacts.ts` > captured WhatsApp pushname), served
   through `/api/namemap` (flows everywhere). Contacts read needs FDA (degrades gracefully).
   `Clientes`/`/api/senders` is limited to chats selected in Ajustes (per-source, empty=all).
-- **In flight (owner-approved):** search+multiselect across tabs, pipeline wrap fix,
-  mass-delete + Trash tab, chat memory/threads + AI-scheduled reminders + morning digest,
-  AI task creation from chat, file upload to chat. See the conversation/commits.
+- **All requested features DONE (shipped through 0.3.0):** real contact names; search +
+  multi-select + bulk actions across tabs; pipeline wrap fix; Papelera (Trash) for tasks +
+  clients; chat threads + long-term memory (save_memory tool); AI creates tasks from chat
+  (create_task, auto-links client); AI schedules reminders (schedule_reminder) with a
+  ⏰ Recordatorios subtab + native sweep + ☀️ "Buenos días" launch digest; image/PDF upload
+  in chat (vision); chat-inclusion picker has search + resolved names. Bandeja's "Descartar"
+  was removed (Trash supersedes it).
+- **Tool-using chat agent** (`src/chat/index.ts` runTurn): Haiku loop with save_memory /
+  create_task / schedule_reminder tools; context includes current datetime + capped memory.
+- **Current version 0.3.0** (shell still 0.1.x; all updates ship online via GitHub Releases,
+  minShellVersion 0.1.0 since no new deps). Bump version + `MIN_SHELL_VERSION=0.1.0 npm run
+  release -- "notas"` to publish; Dad clicks "Buscar actualizaciones".
 
 ## 🔖 HANDOFF STATE (2026-06-25) — earlier baseline
 The app is **feature-complete and bundled**; we're in the final "iron out kinks" phase.
