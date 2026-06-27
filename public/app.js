@@ -6,6 +6,9 @@ const el = (html) => {
 };
 const esc = (s) =>
   (s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// Short Spanish date for "task generated on" labels.
+const fmtGen = (ms) =>
+  ms ? new Date(ms).toLocaleDateString('es', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
 
 // Spanish labels for task statuses and WhatsApp connection states.
 const STATUS_LABELS = { proposed: 'propuesta', todo: 'por hacer', waiting: 'en espera', done: 'hecho', dismissed: 'descartada' };
@@ -210,7 +213,7 @@ function renderInbox() {
         <div class="detail">${esc(t.detail)}</div>
         ${t.sourceQuote ? `<div class="quote">🔎 buscar ${who ? 'a ' + esc(who) : ''}: <span>"${esc(t.sourceQuote)}"</span></div>` : ''}
         ${t.sourceBody && !t.sourceQuote ? `<div class="src">${t.hasAttachment ? '📎 ' : ''}${esc(t.sourceBody.slice(0, 160))}</div>` : ''}
-        <div class="meta">${who ? `<span>cliente: ${esc(who)}</span>` : ''}</div>
+        <div class="meta">${who ? `<span>cliente: ${esc(who)}</span>` : ''}${t.createdAt ? `<span>generada: ${esc(fmtGen(t.createdAt))}</span>` : ''}</div>
         <div class="actions">
           <button class="approve j-approve">✓ Aprobar</button>
           <button class="dismiss j-del" title="Eliminar">🗑</button>
@@ -890,6 +893,7 @@ async function loadMemory() {
 $('#show-memory').onclick = () => {
   $('#chat-log').style.display = 'none';
   $('#chat-form').style.display = 'none';
+  $('#reminders-panel').hidden = true;
   $('#memory-panel').hidden = false;
   loadMemory();
 };
