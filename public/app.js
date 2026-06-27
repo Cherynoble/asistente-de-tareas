@@ -514,12 +514,15 @@ function renderSenders() {
     return;
   }
   for (const s of items) {
-    const resolved = s.displayName && s.displayName !== s.handle ? s.displayName : '';
+    // Is the handle a phone/email/JID identifier, or a free-text client name
+    // (typed into a task)? Free-text names are shown directly, not as "sin nombre".
+    const isId = /@/.test(s.handle) || /^\+?[\d][\d\s().-]*$/.test(s.handle);
+    const resolved = s.displayName && s.displayName !== s.handle ? s.displayName : isId ? '' : s.handle;
     const card = el(`<div class="card sender">
       <input type="checkbox" class="sel" data-id="${esc(s.handle)}" />
-      <span class="handle">${esc(s.handle)}</span>
+      ${isId ? `<span class="handle">${esc(s.handle)}</span>` : ''}
       ${resolved ? `<span class="rn">${esc(resolved)}</span>` : '<span class="rn unnamed">sin nombre</span>'}
-      <span class="count">${s.count} msjs</span>
+      <span class="count">${s.count ? s.count + ' msjs' : 'tarea'}</span>
       <input class="nm" placeholder="${resolved ? 'cambiar nombre' : 'nombre'}" value="${esc(s.name || '')}" />
       <input class="pn" placeholder="qué compran / necesitan" value="${esc(s.productNeed || '')}" />
       <button class="approve save">Guardar</button>

@@ -270,14 +270,16 @@ app.post('/api/trash/empty', (req, res) => {
  * lists people the owner actually chose to track.
  */
 app.get('/api/senders', (_req, res) => {
+  const d = db();
   const selImsg = getSelectedChats();
   const selWa = getSelectedWaChats();
   const filtering = selImsg.length > 0 || selWa.length > 0;
 
   // Which raw chat_ids are "included" given the per-source selections.
   let allowed: string[] = [];
+  let noneAllowed = false;
   if (filtering) {
-    const chatRows = db()
+    const chatRows = d
       .prepare(`SELECT DISTINCT source, chat_id FROM messages WHERE chat_id IS NOT NULL`)
       .all() as { source: string; chat_id: string }[];
     for (const r of chatRows) {
@@ -288,33 +290,54 @@ app.get('/api/senders', (_req, res) => {
         if (!selImsg.length || selImsg.includes(ident)) allowed.push(r.chat_id);
       }
     }
-    if (!allowed.length) {
-      res.json([]);
-      return;
-    }
+    if (!allowed.length) noneAllowed = true;
   }
 
-  const where =
-    `WHERE m.sender IS NOT NULL AND m.sender != 'me'` +
-    ` AND m.sender NOT IN (SELECT handle FROM clients WHERE deleted_at IS NOT NULL AND handle IS NOT NULL)` +
-    (filtering ? ` AND m.chat_id IN (${allowed.map(() => '?').join(',')})` : '');
-  const rows = db()
-    .prepare(
-      `SELECT m.sender AS handle, COUNT(*) AS count, c.name AS name, c.product_need AS productNeed
-       FROM messages m
-       LEFT JOIN clients c ON c.handle = m.sender AND c.deleted_at IS NULL
-       ${where}
-       GROUP BY m.sender ORDER BY count DESC LIMIT 200`,
-    )
-    .all(...(filtering ? allowed : [])) as {
-    handle: string;
-    count: number;
-    name: string | null;
-    productNeed: string | null;
-  }[];
+  type Row = { handle: string; count: number; name: string | null; productNeed: string | null };
+  const byHandle = new Map<string, Row>();
+
+  // 1) Message senders (subject to the selected-chats filter).
+  if (!noneAllowed) {
+    const where =
+      `WHERE m.sender IS NOT NULL AND m.sender != 'me'` +
+      ` AND m.sender NOT IN (SELECT handle FROM clients WHERE deleted_at IS NOT NULL AND handle IS NOT NULL)` +
+      (filtering ? ` AND m.chat_id IN (${allowed.map(() => '?').join(',')})` : '');
+    const rows = d
+      .prepare(
+        `SELECT m.sender AS handle, COUNT(*) AS count, c.name AS name, c.product_need AS productNeed
+         FROM messages m
+         LEFT JOIN clients c ON c.handle = m.sender AND c.deleted_at IS NULL
+         ${where}
+         GROUP BY m.sender ORDER BY count DESC LIMIT 200`,
+      )
+      .all(...(filtering ? allowed : [])) as Row[];
+    for (const r of rows) byHandle.set(r.handle, r);
+  }
+
+  // 2) Clients referenced by a task (client_hint) but not in the message senders
+  //    — e.g. a brand-new client typed into a manually/AI-created task. These are
+  //    explicit, so they show regardless of the chat filter.
+  const deleted = new Set(
+    (d.prepare(`SELECT handle FROM clients WHERE deleted_at IS NOT NULL AND handle IS NOT NULL`).all() as {
+      handle: string;
+    }[]).map((x) => x.handle),
+  );
+  const taskClients = d
+    .prepare(`SELECT DISTINCT client_hint AS h FROM tasks WHERE client_hint != '' AND deleted_at IS NULL`)
+    .all() as { h: string }[];
+  for (const { h } of taskClients) {
+    if (byHandle.has(h) || deleted.has(h)) continue;
+    const c = d
+      .prepare(`SELECT name, product_need AS productNeed FROM clients WHERE handle = ? AND deleted_at IS NULL`)
+      .get(h) as { name: string; productNeed: string } | undefined;
+    byHandle.set(h, { handle: h, count: 0, name: c?.name ?? null, productNeed: c?.productNeed ?? null });
+  }
 
   const names = nameMap();
-  res.json(rows.map((r) => ({ ...r, displayName: names[r.handle] ?? null })));
+  const out = [...byHandle.values()]
+    .map((r) => ({ ...r, displayName: names[r.handle] ?? null }))
+    .sort((a, b) => b.count - a.count);
+  res.json(out);
 });
 
 /** Create/update a client: name + product-need for a handle. */
