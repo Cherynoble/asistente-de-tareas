@@ -12,6 +12,7 @@ export type ActivityEvent =
       sender: string | null;
       senderName: string | null;
       source: string;
+      waAccount: string | null;
       direction: 'incoming' | 'outgoing';
       body: string;
       hasAttachment: boolean;
@@ -41,6 +42,7 @@ interface Row {
   sender: string | null;
   senderName: string | null;
   source: string;
+  waAccount: string | null;
   direction: 'incoming' | 'outgoing';
   body: string;
   ts: number;
@@ -50,6 +52,7 @@ interface Row {
 }
 
 const ROW_COLS = `id, chat_name AS chatName, sender, sender_name AS senderName, source,
+                  wa_account AS waAccount,
                   direction, body, ts,
                   attachment_mimes, attachment_names, attachment_paths`;
 
@@ -153,6 +156,7 @@ export async function runExtraction(opts: ExtractionOptions = {}): Promise<{ pro
       sender: r.sender,
       senderName: r.senderName,
       source: r.source,
+      waAccount: r.waAccount,
       direction: r.direction,
       body: r.body,
       hasAttachment: !!r.attachment_mimes,
@@ -243,6 +247,7 @@ export async function processNewMessages(opts: ProcessOptions = {}): Promise<{
           sender: r.sender,
           senderName: r.senderName,
           source: r.source,
+          waAccount: r.waAccount,
           direction: r.direction,
           body: r.body,
           hasAttachment: !!r.attachment_mimes,

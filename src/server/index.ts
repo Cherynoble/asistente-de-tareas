@@ -11,14 +11,20 @@ import { runExtraction, processNewMessages, type ActivityEvent } from '../extrac
 import { ingestRecentDays, backfillByCount } from '../ingest/imessage/ingest.js';
 import { listChats } from '../ingest/imessage/reader.js';
 import {
-  startWhatsApp,
-  stopWhatsApp,
-  resetWhatsApp,
-  repairWhatsApp,
-  getWaState,
-  backfillWhatsApp,
-  hasWaSession,
-  listWaChats,
+  startAllSessions,
+  stopAllAccounts,
+  anyWaSession,
+  listAccountStates,
+  getAccountState,
+  addAccount,
+  removeAccount,
+  renameAccount,
+  startAccount,
+  resetAccount,
+  repairAccount,
+  backfillAccount,
+  listAccountChats,
+  accountIsReady,
 } from '../ingest/whatsapp/client.js';
 import { runTurn } from '../chat/index.js';
 import {
@@ -55,6 +61,8 @@ import {
   setSetting,
   getSelectedChats,
   getSelectedWaChats,
+  setSelectedWaChats,
+  listWaAccounts,
   getSchedulerConfig,
   timeToCron,
   cronToTime,
@@ -75,7 +83,7 @@ app.get('/api/inbox', (_req, res) => {
       `SELECT t.id, t.title, t.detail, t.client_hint AS clientHint, t.source_quote AS sourceQuote,
               t.created_at AS createdAt, t.source_message_id AS sourceMessageId,
               m.body AS sourceBody, m.sender AS sourceSender, m.chat_name AS chatName,
-              m.has_attachment AS hasAttachment
+              m.has_attachment AS hasAttachment, m.source AS source, m.wa_account AS waAccount
        FROM tasks t
        LEFT JOIN messages m ON m.id = t.source_message_id
        WHERE t.status = 'proposed' AND t.archived_at IS NULL AND t.deleted_at IS NULL
@@ -89,10 +97,13 @@ app.get('/api/inbox', (_req, res) => {
 app.get('/api/tasks', (_req, res) => {
   const rows = db()
     .prepare(
-      `SELECT id, title, detail, client_hint AS clientHint, source_quote AS sourceQuote,
-              status, due_at AS dueAt, updated_at AS updatedAt
-       FROM tasks WHERE status IN ('todo','waiting','done') AND archived_at IS NULL AND deleted_at IS NULL
-       ORDER BY CASE status WHEN 'todo' THEN 0 WHEN 'waiting' THEN 1 ELSE 2 END, updated_at DESC`,
+      `SELECT t.id, t.title, t.detail, t.client_hint AS clientHint, t.source_quote AS sourceQuote,
+              t.status, t.due_at AS dueAt, t.updated_at AS updatedAt,
+              m.source AS source, m.wa_account AS waAccount
+       FROM tasks t
+       LEFT JOIN messages m ON m.id = t.source_message_id
+       WHERE t.status IN ('todo','waiting','done') AND t.archived_at IS NULL AND t.deleted_at IS NULL
+       ORDER BY CASE t.status WHEN 'todo' THEN 0 WHEN 'waiting' THEN 1 ELSE 2 END, t.updated_at DESC`,
     )
     .all();
   res.json(rows);
@@ -272,19 +283,22 @@ app.post('/api/trash/empty', (req, res) => {
 app.get('/api/senders', (_req, res) => {
   const d = db();
   const selImsg = getSelectedChats();
-  const selWa = getSelectedWaChats();
-  const filtering = selImsg.length > 0 || selWa.length > 0;
+  // WhatsApp chat selection is per-account (empty = all for that account).
+  const waSel = new Map(listWaAccounts().map((a) => [a.id, getSelectedWaChats(a.id)]));
+  const anyWaFilter = [...waSel.values()].some((s) => s.length > 0);
+  const filtering = selImsg.length > 0 || anyWaFilter;
 
   // Which raw chat_ids are "included" given the per-source selections.
   let allowed: string[] = [];
   let noneAllowed = false;
   if (filtering) {
     const chatRows = d
-      .prepare(`SELECT DISTINCT source, chat_id FROM messages WHERE chat_id IS NOT NULL`)
-      .all() as { source: string; chat_id: string }[];
+      .prepare(`SELECT DISTINCT source, wa_account, chat_id FROM messages WHERE chat_id IS NOT NULL`)
+      .all() as { source: string; wa_account: string | null; chat_id: string }[];
     for (const r of chatRows) {
       if (r.source === 'whatsapp') {
-        if (!selWa.length || selWa.includes(r.chat_id)) allowed.push(r.chat_id);
+        const sel = waSel.get(r.wa_account || 'acc1') ?? getSelectedWaChats(r.wa_account || 'acc1');
+        if (!sel.length || sel.includes(r.chat_id)) allowed.push(r.chat_id);
       } else {
         const ident = String(r.chat_id).split(';').pop() ?? r.chat_id;
         if (!selImsg.length || selImsg.includes(ident)) allowed.push(r.chat_id);
@@ -505,49 +519,71 @@ app.post('/api/digest/seen', (_req, res) => {
   res.json({ ok: true });
 });
 
-/** Start the read-only WhatsApp mirror (begins QR pairing). */
-app.post('/api/whatsapp/start', (_req, res) => {
-  startWhatsApp();
-  res.json(getWaState());
+// ── WhatsApp accounts (multi-account: the father runs two numbers) ──
+
+/** All registered accounts with their status, identity, and QR. */
+app.get('/api/whatsapp/accounts', (_req, res) => {
+  res.json({ accounts: listAccountStates() });
 });
 
-/** WhatsApp connection status + current QR (data URL) if pairing. */
-app.get('/api/whatsapp/status', (_req, res) => {
-  res.json(getWaState());
+/** Add a fresh account slot and begin pairing it. */
+app.post('/api/whatsapp/accounts', (_req, res) => {
+  res.json(addAccount());
 });
 
-/** Hard reset: scrub orphan Chrome + stale locks and reconnect from scratch. */
-app.post('/api/whatsapp/reset', async (_req, res) => {
-  await resetWhatsApp();
-  res.json(getWaState());
+/** Remove an account: stop it, wipe its session, drop it from the registry. */
+app.delete('/api/whatsapp/accounts/:id', async (req, res) => {
+  await removeAccount(req.params.id);
+  res.json({ ok: true, accounts: listAccountStates() });
 });
 
-/** Re-pair: wipe the (possibly corrupted) session so a fresh QR is shown. */
-app.post('/api/whatsapp/repair', async (_req, res) => {
-  await repairWhatsApp();
-  res.json(getWaState());
+/** Rename (custom label) an account; empty label reverts to auto-detected. */
+app.post('/api/whatsapp/accounts/:id/label', (req, res) => {
+  const label = String((req.body as { label?: string })?.label ?? '');
+  res.json(renameAccount(req.params.id, label) ?? { error: 'cuenta no encontrada' });
 });
 
-/** Backfill recent WhatsApp history once connected. */
-app.post('/api/whatsapp/backfill', async (req, res) => {
+/** Start (begin pairing / reconnect) a single account. */
+app.post('/api/whatsapp/accounts/:id/start', (req, res) => {
+  res.json(startAccount(req.params.id) ?? { error: 'cuenta no encontrada' });
+});
+
+/** One account's status + current QR. */
+app.get('/api/whatsapp/accounts/:id/status', (req, res) => {
+  res.json(getAccountState(req.params.id) ?? { error: 'cuenta no encontrada' });
+});
+
+/** Hard reset one account: scrub orphan Chrome + stale locks, reconnect. */
+app.post('/api/whatsapp/accounts/:id/reset', async (req, res) => {
+  res.json((await resetAccount(req.params.id)) ?? { error: 'cuenta no encontrada' });
+});
+
+/** Re-pair one account: wipe its (corrupted) session so a fresh QR is shown. */
+app.post('/api/whatsapp/accounts/:id/repair', async (req, res) => {
+  res.json((await repairAccount(req.params.id)) ?? { error: 'cuenta no encontrada' });
+});
+
+/** Backfill recent history for one connected account. */
+app.post('/api/whatsapp/accounts/:id/backfill', async (req, res) => {
   const perChat = Math.min(Math.max(Number((req.body as { perChat?: number })?.perChat ?? 50), 1), 500);
   try {
-    res.json(await backfillWhatsApp(perChat));
+    res.json(await backfillAccount(req.params.id, perChat));
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
-/** WhatsApp chats for the selection UI (requires the mirror to be connected). */
-app.get('/api/whatsapp/chats', async (_req, res) => {
-  if (getWaState().status !== 'ready') {
+/** One account's chats for the selection UI (requires that account to be ready). */
+app.get('/api/whatsapp/accounts/:id/chats', async (req, res) => {
+  const id = req.params.id;
+  if (!accountIsReady(id)) {
     res.json({ chats: [], filtering: false, ready: false });
     return;
   }
   try {
-    const selected = new Set(getSelectedWaChats());
+    const selected = new Set(getSelectedWaChats(id));
     const names = nameMap();
-    const chats = (await listWaChats()).map((c) => ({
+    const chats = (await listAccountChats(id)).map((c) => ({
       ...c,
       selected: selected.has(c.id),
       displayName: names[c.id] || c.name || resolveContactName(c.id) || c.id,
@@ -556,6 +592,13 @@ app.get('/api/whatsapp/chats', async (_req, res) => {
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
+});
+
+/** Save a chat selection for one account (empty = all chats). */
+app.post('/api/whatsapp/accounts/:id/chats', (req, res) => {
+  const ids = (req.body as { chats?: unknown })?.chats;
+  setSelectedWaChats(req.params.id, Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : []);
+  res.json({ ok: true });
 });
 
 /** Available iMessage chats (with counts) for the selection UI. */
@@ -595,7 +638,6 @@ app.post('/api/settings', (req, res) => {
     schedulerEnabled?: boolean;
     dailyTime?: string;
     selectedChats?: string[];
-    waSelectedChats?: string[];
     remindersEnabled?: boolean;
     nudgeIntervalDays?: number;
   };
@@ -612,8 +654,6 @@ app.post('/api/settings', (req, res) => {
   }
   if (Array.isArray(b.selectedChats))
     setSetting('selected_chats', JSON.stringify(b.selectedChats.filter((x) => typeof x === 'string')));
-  if (Array.isArray(b.waSelectedChats))
-    setSetting('wa_selected_chats', JSON.stringify(b.waSelectedChats.filter((x) => typeof x === 'string')));
   applySchedule();
   res.json({ ok: true });
 });
@@ -877,7 +917,7 @@ process.on('unhandledRejection', (reason) => {
 // orphaned Chrome holding the session lock (which blocks the next start).
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
-    void stopWhatsApp().finally(() => process.exit(0));
+    void stopAllAccounts().finally(() => process.exit(0));
   });
 }
 
@@ -895,9 +935,37 @@ app.listen(PORT, () => {
       console.error('[reminders] sweep failed:', err instanceof Error ? err.message : err);
     }
   }, 5 * 60 * 1000);
-  // Reconnect WhatsApp automatically if a session was already paired.
-  if (hasWaSession()) {
-    console.log('  WhatsApp session found — reconnecting…');
-    startWhatsApp();
+
+  // Sleep/wake detector (works without the Electron shell): if the wall clock
+  // jumps far past our tick interval, the Mac most likely slept — and macOS may
+  // have killed the puppeteer Chrome, leaving a wedged/disconnected session that
+  // never silently recovers. On a detected wake, reconnect any paired account
+  // that isn't currently 'ready' (reset scrubs orphans + relaunches cleanly).
+  // This directly addresses "laptop closed → WhatsApp signed out, auto sign-in
+  // doesn't kick in". A still-healthy 'ready' account is left alone.
+  const WAKE_TICK_MS = 30_000;
+  let lastWakeTick = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    const gap = now - lastWakeTick;
+    lastWakeTick = now;
+    if (gap > WAKE_TICK_MS * 4) {
+      console.log(`[whatsapp] wake detected (gap ${Math.round(gap / 1000)}s) — health-checking accounts`);
+      for (const s of listAccountStates()) {
+        // Only revive accounts that are genuinely stuck (paired but idle/dropped).
+        // Leave alone ones already pairing/syncing/connected — and ones the
+        // Electron shell's powerMonitor may have just restarted on resume.
+        if (s.hasSession && (s.status === 'disconnected' || s.status === 'idle')) {
+          console.log(`[whatsapp:${s.id}] reconnecting after wake`);
+          void resetAccount(s.id);
+        }
+      }
+    }
+  }, WAKE_TICK_MS);
+
+  // Reconnect every account that already has a paired session.
+  if (anyWaSession()) {
+    console.log('  WhatsApp session(s) found — reconnecting…');
+    startAllSessions();
   }
 });

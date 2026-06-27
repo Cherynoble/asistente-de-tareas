@@ -37,6 +37,28 @@ function sourceBadge(source) {
   return '';
 }
 
+// id → short label for connected WhatsApp accounts (loaded from the accounts
+// endpoint). Used to badge which account a combined-inbox item came from.
+let waAccountLabels = {};
+async function loadWaAccountLabels() {
+  try {
+    const { accounts } = await (await fetch('/api/whatsapp/accounts')).json();
+    waAccountLabels = {};
+    for (const a of accounts || []) waAccountLabels[a.id] = a.label;
+  } catch {
+    /* keep whatever we had */
+  }
+}
+// Badge for a WhatsApp account on a task/message — only shown when more than one
+// account exists (single-account users get no clutter).
+function accountBadge(source, waAccount) {
+  if (source !== 'whatsapp' || !waAccount) return '';
+  const ids = Object.keys(waAccountLabels);
+  if (ids.length < 2) return '';
+  const label = waAccountLabels[waAccount] || waAccount;
+  return ` <span class="acctbadge" title="Cuenta de WhatsApp">${esc(label)}</span>`;
+}
+
 // Turn a raw handle/JID into something readable: assigned name → pushname →
 // clean phone (WhatsApp @c.us) → friendly label for hidden (@lid) / groups.
 function prettySender(sender, senderName) {
@@ -64,8 +86,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
     if (id === 'settings') {
       loadSettings();
       loadChats();
-      loadWaChats();
-      refreshWa();
+      loadWaAccounts();
     }
   });
 });
@@ -213,7 +234,7 @@ function renderInbox() {
         <div class="detail">${esc(t.detail)}</div>
         ${t.sourceQuote ? `<div class="quote">🔎 buscar ${who ? 'a ' + esc(who) : ''}: <span>"${esc(t.sourceQuote)}"</span></div>` : ''}
         ${t.sourceBody && !t.sourceQuote ? `<div class="src">${t.hasAttachment ? '📎 ' : ''}${esc(t.sourceBody.slice(0, 160))}</div>` : ''}
-        <div class="meta">${who ? `<span>cliente: ${esc(who)}</span>` : ''}${t.createdAt ? `<span>generada: ${esc(fmtGen(t.createdAt))}</span>` : ''}</div>
+        <div class="meta">${who ? `<span>cliente: ${esc(who)}</span>` : ''}${t.createdAt ? `<span>generada: ${esc(fmtGen(t.createdAt))}</span>` : ''}${accountBadge(t.source, t.waAccount)}</div>
         <div class="actions">
           <button class="approve j-approve">✓ Aprobar</button>
           <button class="dismiss j-del" title="Eliminar">🗑</button>
@@ -301,7 +322,7 @@ function renderTasks() {
         <div class="detail">${esc(t.detail)}</div>
         ${t.sourceQuote ? `<div class="quote">🔎 "${esc(t.sourceQuote)}"</div>` : ''}
         <div class="meta">
-          ${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}
+          ${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}${accountBadge(t.source, t.waAccount)}
           <label class="due ${overdue ? 'overdue' : ''}">vence <input type="date" class="duedate" value="${dateInput(t.dueAt)}" /></label>
         </div>
         <div class="actions">
@@ -414,7 +435,7 @@ function handleEvent(e) {
     $('#msg-count').textContent = counters.msgs;
     const who = e.direction === 'outgoing' ? 'yo →' : esc(prettySender(e.sender, e.senderName));
     $('#msg-feed').append(el(`<div class="mrow ${e.direction === 'outgoing' ? 'out' : ''}">
-      <div class="who"><span>${sourceBadge(e.source)} ${who}</span>${e.hasAttachment ? '<span class="paperclip">📎</span>' : ''}</div>
+      <div class="who"><span>${sourceBadge(e.source)}${accountBadge(e.source, e.waAccount)} ${who}</span>${e.hasAttachment ? '<span class="paperclip">📎</span>' : ''}</div>
       <div class="clip">${esc(e.body)}</div></div>`));
   } else if (e.type === 'vision') {
     counters.vis++;
@@ -1080,7 +1101,6 @@ function filterChatRows(listSel, q) {
   });
 }
 $('#chats-search').addEventListener('input', (e) => filterChatRows('#chats-list', e.target.value));
-$('#wachats-search').addEventListener('input', (e) => filterChatRows('#wachats-list', e.target.value));
 
 async function saveChatSelection(ids) {
   await fetch('/api/settings', {
@@ -1098,25 +1118,213 @@ $('#save-chats').addEventListener('click', () => {
 });
 $('#clear-chats').addEventListener('click', () => saveChatSelection([]));
 
-// ---- WhatsApp chat selection ----
-async function loadWaChats() {
-  const list = $('#wachats-list');
-  list.innerHTML = '<div class="empty">cargando…</div>';
+// ---- WhatsApp accounts (multi-account) ----
+let waPollTimer = null;
+const waExpanded = new Set(); // account ids whose chat picker is open
+
+function waBadgeHtml(status) {
+  const cls =
+    status === 'ready'
+      ? 'b-done'
+      : ['qr', 'starting', 'authenticated'].includes(status)
+        ? 'b-waiting'
+        : 'b-todo';
+  return `<span class="badge ${cls}">${waLabel(status)}</span>`;
+}
+
+function waIdentityLine(st) {
+  if (st.identity && (st.identity.number || st.identity.name)) {
+    const num = st.identity.number ? '+' + esc(st.identity.number) : '';
+    const nm = st.identity.name ? esc(st.identity.name) : '';
+    return `${nm}${nm && num ? ' · ' : ''}${num}`;
+  }
+  return st.hasSession ? 'vinculada (reconectando)' : 'sin vincular';
+}
+
+async function loadWaAccounts() {
+  const wrap = $('#wa-accounts');
   let data;
   try {
-    data = await (await fetch('/api/whatsapp/chats')).json();
+    data = await (await fetch('/api/whatsapp/accounts')).json();
+  } catch {
+    wrap.innerHTML = '<div class="empty">no se pudieron cargar las cuentas</div>';
+    return;
+  }
+  const accounts = data.accounts || [];
+  waAccountLabels = {};
+  for (const a of accounts) waAccountLabels[a.id] = a.label;
+
+  wrap.innerHTML = '';
+  if (!accounts.length) wrap.innerHTML = '<div class="empty">No hay cuentas todavía.</div>';
+  for (const st of accounts) wrap.append(renderWaCard(st));
+
+  // Keep polling while any account is mid-pairing/connecting.
+  if (waPollTimer) {
+    clearTimeout(waPollTimer);
+    waPollTimer = null;
+  }
+  const transitional = accounts.some((a) => ['starting', 'qr', 'authenticated'].includes(a.status));
+  if (transitional) {
+    waPollTimer = setTimeout(() => {
+      if (document.querySelector('#settings').classList.contains('active')) loadWaAccounts();
+    }, 2500);
+  }
+  // Re-open any chat pickers the user had expanded.
+  for (const id of waExpanded) loadAccountChats(id);
+}
+
+function renderWaCard(st) {
+  const id = st.id;
+  const card = el(`<div class="wa-card" data-acc="${esc(id)}"></div>`);
+
+  const head = el(`<div class="wa-head">
+    <div class="wa-name"><b>${esc(st.label)}</b> ${waBadgeHtml(st.status)}</div>
+    <div class="wa-id hint">${waIdentityLine(st)}</div>
+  </div>`);
+  card.append(head);
+
+  const body = el('<div class="wa-cardbody"></div>');
+  card.append(body);
+
+  if (st.status === 'ready') {
+    body.append(el(`<div class="setrow"><span class="saved">✓ Conectado</span></div>`));
+    const row = el('<div class="setrow"></div>');
+    const bf = el('<button class="primary">Importar historial</button>');
+    const bfStatus = el('<span class="run-status"></span>');
+    bf.onclick = async () => {
+      bfStatus.textContent = 'obteniendo… (puede tardar un minuto)';
+      const r = await (
+        await fetch(`/api/whatsapp/accounts/${id}/backfill`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ perChat: 50 }),
+        })
+      ).json();
+      bfStatus.textContent = r.error ? 'error: ' + r.error : `importados ${r.inserted} de ${r.chats} chats`;
+      loadStats();
+    };
+    const pick = el('<button>Elegir chats a incluir</button>');
+    pick.onclick = () => {
+      if (waExpanded.has(id)) waExpanded.delete(id);
+      else waExpanded.add(id);
+      loadWaAccounts();
+    };
+    row.append(bf, pick, bfStatus);
+    body.append(row);
+    // Per-account chat picker (filled by loadAccountChats when expanded).
+    if (waExpanded.has(id)) body.append(renderWaChatPicker(id));
+  } else if (st.status === 'qr' && st.qrDataUrl) {
+    body.append(
+      el(`<div><img class="wa-qr" src="${st.qrDataUrl}" alt="QR de WhatsApp" />
+        <p class="hint">Escanea en ~60 s desde el WhatsApp de esta cuenta; el código se actualiza solo.</p></div>`),
+    );
+  } else if (st.status === 'starting' || st.status === 'authenticated') {
+    const d = st.detail ? esc(st.detail) : 'abriendo un navegador en segundo plano, ~10–20 s';
+    const attempt = st.attempts > 1 ? ` <span class="muted">(intento ${st.attempts})</span>` : '';
+    body.append(el(`<div class="hint">conectando… ${d}${attempt}</div>`));
+    body.append(waRecoveryRow(id));
+  } else {
+    if (st.lastError) body.append(el(`<div class="hint err">⚠️ ${esc(st.lastError)}</div>`));
+    const row = el('<div class="setrow"></div>');
+    const connect = el(`<button class="primary">${st.hasSession ? 'Reconectar' : 'Conectar / escanear QR'}</button>`);
+    connect.onclick = () => waStart(id);
+    row.append(connect);
+    body.append(row);
+    body.append(waRecoveryRow(id));
+  }
+
+  // Footer: rename + remove (always available).
+  const foot = el('<div class="setrow wa-foot"></div>');
+  const rename = el('<button class="small">Renombrar</button>');
+  rename.onclick = () => waRename(id, st.label);
+  const remove = el('<button class="small danger">Quitar cuenta</button>');
+  remove.onclick = () => waRemove(id, st.label);
+  foot.append(rename, remove);
+  card.append(foot);
+
+  return card;
+}
+
+function waRecoveryRow(id) {
+  const row = el('<div class="setrow"></div>');
+  const reset = el('<button>Reconectar</button>');
+  reset.onclick = () => waReset(id);
+  const repair = el('<button>Volver a vincular</button>');
+  repair.onclick = () => waRepair(id);
+  row.append(reset, repair);
+  return row;
+}
+
+async function waStart(id) {
+  await fetch(`/api/whatsapp/accounts/${id}/start`, { method: 'POST' }).catch(() => {});
+  setTimeout(loadWaAccounts, 1200);
+}
+async function waReset(id) {
+  await fetch(`/api/whatsapp/accounts/${id}/reset`, { method: 'POST' }).catch(() => {});
+  setTimeout(loadWaAccounts, 1500);
+}
+async function waRepair(id) {
+  if (!confirm('¿Reiniciar esta cuenta y escanear un nuevo código QR? Esto borra la vinculación actual de esta cuenta.')) return;
+  await fetch(`/api/whatsapp/accounts/${id}/repair`, { method: 'POST' }).catch(() => {});
+  setTimeout(loadWaAccounts, 1500);
+}
+async function waRename(id, current) {
+  const label = prompt('Nombre para esta cuenta (deja vacío para usar el nombre de WhatsApp):', current || '');
+  if (label === null) return;
+  await fetch(`/api/whatsapp/accounts/${id}/label`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label }),
+  }).catch(() => {});
+  loadWaAccounts();
+}
+async function waRemove(id, label) {
+  if (!confirm(`¿Quitar la cuenta "${label}"? Se cierra y se borra su vinculación (los mensajes ya guardados se conservan).`)) return;
+  waExpanded.delete(id);
+  await fetch(`/api/whatsapp/accounts/${id}`, { method: 'DELETE' }).catch(() => {});
+  loadWaAccounts();
+}
+
+$('#wa-add').addEventListener('click', async () => {
+  await fetch('/api/whatsapp/accounts', { method: 'POST' }).catch(() => {});
+  setTimeout(loadWaAccounts, 1200);
+});
+
+// Per-account chat-inclusion picker.
+function renderWaChatPicker(id) {
+  const box = el(`<div class="wa-chatpick" id="wa-chatpick-${esc(id)}">
+    <p class="hint" id="wa-chnote-${esc(id)}">Cargando chats…</p>
+    <input class="search" id="wa-chsearch-${esc(id)}" placeholder="Buscar chat por nombre o número…" />
+    <div class="chatsel" id="wa-chlist-${esc(id)}"><div class="empty">cargando…</div></div>
+    <div class="setrow">
+      <button class="primary" id="wa-chsave-${esc(id)}">Guardar selección</button>
+      <button id="wa-chall-${esc(id)}">Incluir todos</button>
+      <span class="saved" id="wa-chsaved-${esc(id)}"></span>
+    </div>
+  </div>`);
+  return box;
+}
+
+async function loadAccountChats(id) {
+  const list = document.getElementById(`wa-chlist-${id}`);
+  if (!list) return; // picker not currently rendered
+  let data;
+  try {
+    data = await (await fetch(`/api/whatsapp/accounts/${id}/chats`)).json();
   } catch {
     list.innerHTML = '<div class="empty">no se pudieron cargar los chats</div>';
     return;
   }
+  const note = document.getElementById(`wa-chnote-${id}`);
   if (!data.ready) {
-    list.innerHTML = '<div class="empty">Primero conecta WhatsApp (sección de arriba) y vuelve a abrir Ajustes.</div>';
-    $('#wachats-note').textContent = 'Conecta WhatsApp para elegir qué chats incluir.';
+    list.innerHTML = '<div class="empty">Conecta esta cuenta para elegir sus chats.</div>';
+    if (note) note.textContent = '';
     return;
   }
-  $('#wachats-note').textContent = data.filtering
-    ? 'Solo se incluyen los chats marcados.'
-    : 'Sin selección — se incluyen todos los chats. Marca algunos para limitar.';
+  if (note)
+    note.textContent = data.filtering
+      ? 'Solo se incluyen los chats marcados de esta cuenta.'
+      : 'Sin selección — se incluyen todos los chats de esta cuenta. Marca algunos para limitar.';
   list.innerHTML = '';
   for (const c of data.chats) {
     const name = c.displayName || c.name;
@@ -1129,131 +1337,32 @@ async function loadWaChats() {
       </label>`),
     );
   }
-  filterChatRows('#wachats-list', $('#wachats-search').value);
+  const search = document.getElementById(`wa-chsearch-${id}`);
+  if (search) {
+    filterChatRows(`#wa-chlist-${id}`, search.value);
+    search.oninput = () => filterChatRows(`#wa-chlist-${id}`, search.value);
+  }
+  const save = document.getElementById(`wa-chsave-${id}`);
+  if (save)
+    save.onclick = () => saveAccountChats(id, [...list.querySelectorAll('input:checked')].map((i) => i.value));
+  const all = document.getElementById(`wa-chall-${id}`);
+  if (all) all.onclick = () => saveAccountChats(id, []);
 }
 
-async function saveWaChatSelection(ids) {
-  await fetch('/api/settings', {
+async function saveAccountChats(id, ids) {
+  await fetch(`/api/whatsapp/accounts/${id}/chats`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ waSelectedChats: ids }),
-  });
-  $('#wachats-saved').textContent = '✓ guardado';
-  await loadWaChats();
-}
-
-$('#save-wachats').addEventListener('click', () => {
-  const ids = [...document.querySelectorAll('#wachats-list input:checked')].map((i) => i.value);
-  saveWaChatSelection(ids);
-});
-$('#clear-wachats').addEventListener('click', () => saveWaChatSelection([]));
-
-// ---- WhatsApp ----
-function renderWa(st) {
-  const badge = $('#wa-status');
-  const body = $('#wa-body');
-  badge.textContent = waLabel(st.status);
-  badge.className =
-    'badge ' +
-    (st.status === 'ready'
-      ? 'b-done'
-      : ['qr', 'starting', 'authenticated'].includes(st.status)
-        ? 'b-waiting'
-        : 'b-todo');
-
-  if (st.status === 'ready') {
-    body.innerHTML = '';
-    const row = el(`<div class="setrow">
-      <span class="saved">✓ Conectado</span>
-      <button id="wa-backfill" class="primary">Importar historial</button>
-      <span id="wa-bf" class="run-status"></span>
-    </div>`);
-    body.append(row);
-    $('#wa-backfill').onclick = async () => {
-      $('#wa-bf').textContent = 'obteniendo… (puede tardar un minuto)';
-      const r = await (
-        await fetch('/api/whatsapp/backfill', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ perChat: 50 }),
-        })
-      ).json();
-      $('#wa-bf').textContent = r.error ? 'error: ' + r.error : `importados ${r.inserted} de ${r.chats} chats`;
-      loadStats();
-    };
-  } else if (st.status === 'qr' && st.qrDataUrl) {
-    body.innerHTML = `<img class="wa-qr" src="${st.qrDataUrl}" alt="QR de WhatsApp" /><p class="hint">Escanea en ~60 s; el código se actualiza solo.</p>`;
-  } else if (st.status === 'starting' || st.status === 'authenticated') {
-    const d = st.detail ? esc(st.detail) : 'abriendo un navegador en segundo plano, ~10–20 s';
-    const attempt = st.attempts > 1 ? ` <span class="muted">(intento ${st.attempts})</span>` : '';
-    body.innerHTML = `<div class="hint">conectando… ${d}${attempt}</div>`;
-    const row = el('<div class="setrow"></div>');
-    const reset = el('<button id="wa-reset">Reconectar</button>');
-    reset.onclick = () => waReconnect(body);
-    row.append(reset);
-    // Escape hatch if a sync is genuinely wedged (not just slow): full re-pair.
-    const repair = el('<button id="wa-repair">Volver a vincular</button>');
-    repair.onclick = () => waRepair(body);
-    row.append(repair);
-    body.append(row);
-  } else {
-    body.innerHTML = '';
-    if (st.lastError) body.append(el(`<div class="hint err">⚠️ ${esc(st.lastError)}</div>`));
-    const row = el('<div class="setrow"></div>');
-    const btn = el('<button id="wa-connect" class="primary">Conectar WhatsApp</button>');
-    btn.onclick = () => waReconnect(body);
-    row.append(btn);
-    // Re-pair is the escape hatch for a corrupted session (loses the pairing).
-    const repair = el('<button id="wa-repair">Volver a vincular (reiniciar y escanear)</button>');
-    repair.onclick = () => waRepair(body);
-    row.append(repair);
-    body.append(row);
-  }
-}
-
-// Re-pair = wipe the stored session and start fresh (shows a new QR). Use when
-// the session is corrupted and a plain Reconnect won't clear it.
-async function waRepair(body) {
-  if (!confirm('¿Reiniciar WhatsApp y escanear un nuevo código QR? Esto borra la vinculación actual.')) return;
-  body.innerHTML = '<div class="hint">reiniciando sesión… aparecerá un QR en breve</div>';
-  try {
-    await fetch('/api/whatsapp/repair', { method: 'POST' });
-  } catch {
-    /* fall through to polling */
-  }
-  setTimeout(refreshWa, 1500);
-}
-
-// Reset = stop, scrub orphan Chrome + stale locks, reconnect. Recovers a stuck
-// state (the recurring "connecting…" hang) without touching the terminal.
-async function waReconnect(body) {
-  body.innerHTML = '<div class="hint">reiniciando… (cerrando el navegador atascado)</div>';
-  try {
-    await fetch('/api/whatsapp/reset', { method: 'POST' });
-  } catch {
-    /* fall through to polling */
-  }
-  setTimeout(refreshWa, 1500);
-}
-
-async function refreshWa() {
-  let st;
-  try {
-    st = await (await fetch('/api/whatsapp/status')).json();
-  } catch {
-    return;
-  }
-  renderWa(st);
-  // Keep polling while pairing/connecting.
-  if (['starting', 'qr', 'authenticated'].includes(st.status)) {
-    setTimeout(() => {
-      if (document.querySelector('#settings').classList.contains('active')) refreshWa();
-    }, 2500);
-  }
+    body: JSON.stringify({ chats: ids }),
+  }).catch(() => {});
+  const saved = document.getElementById(`wa-chsaved-${id}`);
+  if (saved) saved.textContent = '✓ guardado';
+  loadAccountChats(id);
 }
 
 (async () => {
   await loadNames();
+  await loadWaAccountLabels(); // so per-account badges render before opening Ajustes
   loadStats();
   loadInbox();
   loadTasks();

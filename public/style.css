@@ -138,6 +138,20 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .srcbadge { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px; margin-right: 4px; letter-spacing: 0.02em; }
 .srcbadge.wa { background: #d8f3e3; color: #1c9b52; }
 .srcbadge.imsg { background: #dbe9ff; color: #2f6df6; }
+.acctbadge { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #eef2f7; color: var(--muted); border: 1px solid var(--line); }
+
+/* WhatsApp account cards (multi-account settings) */
+.wa-card { border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px; margin-bottom: 12px; background: var(--card); box-shadow: var(--shadow); }
+.wa-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.wa-head .wa-name { font-size: 15px; }
+.wa-head .wa-name .badge { margin-left: 6px; }
+.wa-head .wa-id { margin: 0; font-size: 12px; }
+.wa-cardbody { margin-bottom: 6px; }
+.wa-cardbody .setrow { margin: 6px 0; }
+.wa-foot { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+button.small { font-size: 12px; padding: 4px 9px; }
+button.danger { color: var(--red); border-color: #f0c9c9; background: #fff; }
+.wa-chatpick { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
 
 .vcard { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; box-shadow: var(--shadow); }
 .vcard img { width: 100%; max-height: 200px; object-fit: cover; border-radius: 7px; background: #eef1f5; }

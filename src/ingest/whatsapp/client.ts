@@ -6,7 +6,19 @@ import type { Message } from 'whatsapp-web.js';
 import QRCode from 'qrcode';
 import { config } from '../../config.js';
 import { db } from '../../db/index.js';
-import { getSelectedWaChats } from '../../settings.js';
+import {
+  getSelectedWaChats,
+  listWaAccounts,
+  addWaAccount,
+  removeWaAccount,
+  setWaLabel,
+  getWaLabel,
+  setWaIdentity,
+  getWaIdentity,
+  waCacheDir,
+  type WaAccountMeta,
+  type WaIdentity,
+} from '../../settings.js';
 
 // whatsapp-web.js is CommonJS — default-import then destructure (Node's ESM
 // loader can't bind its named exports directly).
@@ -14,77 +26,22 @@ const { Client, LocalAuth } = pkg;
 
 export type WaStatus = 'idle' | 'starting' | 'qr' | 'authenticated' | 'ready' | 'disconnected';
 
-let client: InstanceType<typeof Client> | null = null;
-let status: WaStatus = 'idle';
-let qrDataUrl: string | null = null;
-let everReady = false;
-// Diagnostics surfaced to the UI so a stall isn't an opaque "connecting…".
-let detail = '';
-let lastError = '';
-// Readiness watchdog: if we authenticate but never reach 'ready', recycle.
-let readyTimer: ReturnType<typeof setTimeout> | null = null;
-let startAttempts = 0;
 const READY_TIMEOUT_MS = Number(process.env.WA_READY_TIMEOUT_MS ?? 90_000);
 // Recycle at most once (a transient lock clears on relaunch). Beyond that the
 // session cache is usually corrupted — recycling just re-links and thrashes, so
 // we stop and tell the user to Re-pair instead.
 const MAX_ATTEMPTS = Number(process.env.WA_MAX_ATTEMPTS ?? 2);
 
-const authPath = () => path.join(config.dataDir, 'wwebjs_auth');
-const sessionPath = () => path.join(authPath(), 'session');
-
-/**
- * Kill any leftover Chrome bound to OUR WhatsApp profile. A non-graceful kill
- * of the server (e.g. `kill -9`, which can't run stopWhatsApp) orphans the
- * puppeteer Chrome; it keeps holding the userDataDir lock and the linked-device
- * session, so the next launch authenticates but never reaches 'ready'. We match
- * only processes whose command line references our session dir — never the
- * user's normal Chrome (which uses a different profile). Returns count killed.
- */
-function killOrphanChrome(): number {
-  const needle = authPath();
-  let out = '';
-  try {
-    out = execFileSync('/bin/ps', ['-axo', 'pid=,command='], { encoding: 'utf8' });
-  } catch {
-    return 0;
-  }
-  let killed = 0;
-  for (const line of out.split('\n')) {
-    if (!line.includes(needle)) continue; // only our session
-    if (!/[Cc]hrom(e|ium)/.test(line)) continue; // only browser processes
-    const pid = Number(line.trim().split(/\s+/)[0]);
-    if (!pid || pid === process.pid) continue;
-    try {
-      process.kill(pid, 'SIGKILL');
-      killed++;
-    } catch {
-      /* already gone */
-    }
-  }
-  return killed;
-}
-
-/** Remove stale Chrome singleton lock files left by an ungraceful exit. */
-function removeStaleLocks(): void {
-  for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
-    try {
-      fs.rmSync(path.join(sessionPath(), f), { force: true });
-    } catch {
-      /* best effort */
-    }
-  }
-}
-
-/**
- * Guarantee a clean slate before launching the browser. Safe to call only when
- * no client is live in THIS process (startWhatsApp's `if (client) return` guard
- * ensures that), so anything we find is genuinely an orphan.
- */
-function cleanupSession(): void {
-  const killed = killOrphanChrome();
-  if (killed) console.log(`[whatsapp] cleaned up ${killed} orphaned Chrome process(es)`);
-  removeStaleLocks();
+export interface WaState {
+  id: string;
+  label: string; // resolved display label (custom > identity > id)
+  identity: WaIdentity | null; // connected phone number + profile name, if known
+  status: WaStatus;
+  qrDataUrl: string | null;
+  detail: string;
+  lastError: string;
+  attempts: number;
+  hasSession: boolean;
 }
 
 /** Find a Chrome/Chromium to drive: env override → system Chrome → bundled. */
@@ -95,289 +52,424 @@ function chromePath(): string | undefined {
   return undefined; // let puppeteer use its bundled browser
 }
 
-/** True if a paired session already exists (so we can auto-reconnect). */
-export function hasWaSession(): boolean {
-  try {
-    return fs.existsSync(authPath()) && fs.readdirSync(authPath()).length > 0;
-  } catch {
-    return false;
+/**
+ * One WhatsApp Web mirror (read-only) for a single account. The app can run
+ * several of these at once; each owns its own session directory, browser
+ * profile, status, and recovery state. All the hard-won single-account fixes
+ * (orphan-Chrome cleanup, stale-lock removal, the readiness watchdog, the
+ * writable web-version cache) live here, now scoped per account.
+ */
+class WaAccount {
+  readonly id: string;
+  authDir: string;
+  private client: InstanceType<typeof Client> | null = null;
+  private status: WaStatus = 'idle';
+  private qrDataUrl: string | null = null;
+  private everReady = false;
+  private detail = '';
+  private lastError = '';
+  private readyTimer: ReturnType<typeof setTimeout> | null = null;
+  private startAttempts = 0;
+
+  constructor(meta: WaAccountMeta) {
+    this.id = meta.id;
+    this.authDir = meta.authDir;
   }
-}
 
-export interface WaState {
-  status: WaStatus;
-  qrDataUrl: string | null;
-  detail: string;
-  lastError: string;
-  attempts: number;
-}
+  // ── paths (all per-account so two accounts never collide) ──
+  private authPath(): string {
+    return this.authDir;
+  }
+  private sessionPath(): string {
+    return path.join(this.authDir, 'session');
+  }
 
-export function getWaState(): WaState {
-  return { status, qrDataUrl, detail, lastError, attempts: startAttempts };
-}
-
-const INSERT = `INSERT OR IGNORE INTO messages
-  (source, source_msg_id, chat_id, chat_name, sender, sender_name, direction,
-   body, ts, ingested_at, has_attachment, attachment_mimes, attachment_names, attachment_paths)
-  VALUES (@source, @sid, @chatId, @chatName, @sender, @senderName, @dir,
-   @body, @ts, @now, @hasAtt, @mimes, '', '')`;
-
-/** Normalize and persist one WhatsApp message. Returns 1 if newly inserted. */
-async function persist(msg: Message): Promise<number> {
-  try {
-    // Chat selection: skip messages from chats the user didn't pick (empty = all).
-    const selected = getSelectedWaChats();
-    if (selected.length && msg.id.remote && !selected.includes(msg.id.remote)) return 0;
-
-    const hasMedia = msg.hasMedia;
-    let body = msg.body || '';
-    if (!body && hasMedia) body = `[attachment: ${msg.type}]`;
-    if (!body) return 0;
-
-    const fromMe = msg.fromMe;
-    const sender = fromMe ? 'me' : msg.author || msg.from || null;
-    let senderName: string | null = null;
-    let chatName: string | null = null;
+  hasSession(): boolean {
     try {
-      const chat = await msg.getChat();
-      chatName = chat.name || null;
+      return fs.existsSync(this.authPath()) && fs.readdirSync(this.authPath()).length > 0;
     } catch {
-      /* keep null */
+      return false;
     }
-    if (!fromMe) {
+  }
+
+  /** Resolved label: custom rename > connected identity > generic. */
+  label(): string {
+    const custom = getWaLabel(this.id);
+    if (custom) return custom;
+    const ident = getWaIdentity(this.id);
+    if (ident) return ident.name || ident.number || this.id;
+    const n = Number(this.id.replace(/^acc/, '')) || 0;
+    return `Cuenta ${n || this.id}`;
+  }
+
+  state(): WaState {
+    return {
+      id: this.id,
+      label: this.label(),
+      identity: getWaIdentity(this.id),
+      status: this.status,
+      qrDataUrl: this.qrDataUrl,
+      detail: this.detail,
+      lastError: this.lastError,
+      attempts: this.startAttempts,
+      hasSession: this.hasSession(),
+    };
+  }
+
+  /**
+   * Kill any leftover Chrome bound to THIS account's profile. A non-graceful
+   * kill of the server (e.g. kill -9, or the OS killing Chrome on sleep) orphans
+   * the puppeteer Chrome; it keeps holding the userDataDir lock and the linked
+   * session, so the next launch authenticates but never reaches 'ready'. We match
+   * only processes whose command line references this account's session dir —
+   * never the user's normal Chrome and never a sibling account.
+   */
+  private killOrphanChrome(): number {
+    const needle = this.authPath();
+    let out = '';
+    try {
+      out = execFileSync('/bin/ps', ['-axo', 'pid=,command='], { encoding: 'utf8' });
+    } catch {
+      return 0;
+    }
+    let killed = 0;
+    for (const line of out.split('\n')) {
+      if (!line.includes(needle)) continue; // only this account's session
+      if (!/[Cc]hrom(e|ium)/.test(line)) continue; // only browser processes
+      const pid = Number(line.trim().split(/\s+/)[0]);
+      if (!pid || pid === process.pid) continue;
       try {
-        const c = await msg.getContact();
-        senderName = c.pushname || c.name || c.number || null;
+        process.kill(pid, 'SIGKILL');
+        killed++;
+      } catch {
+        /* already gone */
+      }
+    }
+    return killed;
+  }
+
+  /** Remove stale Chrome singleton lock files left by an ungraceful exit. */
+  private removeStaleLocks(): void {
+    for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+      try {
+        fs.rmSync(path.join(this.sessionPath(), f), { force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+  }
+
+  /** Clean slate before launching: only safe when no client is live here. */
+  private cleanupSession(): void {
+    const killed = this.killOrphanChrome();
+    if (killed) console.log(`[whatsapp:${this.id}] cleaned up ${killed} orphaned Chrome process(es)`);
+    this.removeStaleLocks();
+  }
+
+  /** Capture the connected account's phone number + profile name (post-ready). */
+  private async captureIdentity(): Promise<void> {
+    try {
+      const info = (this.client as unknown as { info?: { wid?: { user?: string }; pushname?: string } })
+        ?.info;
+      const number = info?.wid?.user || '';
+      const name = info?.pushname || '';
+      if (number || name) setWaIdentity(this.id, { number, name });
+    } catch {
+      /* identity is best-effort */
+    }
+  }
+
+  /**
+   * If we authenticate but never reach 'ready' within the timeout, recycle the
+   * client (up to MAX_ATTEMPTS) instead of hanging on "connecting…" forever.
+   */
+  private armReadyWatchdog(): void {
+    if (this.readyTimer) clearTimeout(this.readyTimer);
+    this.readyTimer = setTimeout(() => {
+      if (this.status === 'ready') return;
+
+      // Authenticated but not ready = WhatsApp's initial history sync (the phone
+      // shows a spinning linked-device indicator). The first sync of a busy
+      // account can take minutes. Recycling here would re-link and restart that
+      // sync from scratch — so it might NEVER finish. Be patient.
+      if (this.status === 'authenticated') {
+        this.detail =
+          'sincronizando — la primera vez puede tardar varios minutos; deja la app abierta y el teléfono conectado';
+        return;
+      }
+      if (this.status === 'qr') return; // still awaiting the scan; auto-refreshes
+
+      // Stuck on 'starting': the browser launched but never loaded WhatsApp Web.
+      if (this.startAttempts >= MAX_ATTEMPTS) {
+        this.lastError =
+          `No se pudo cargar WhatsApp tras ${MAX_ATTEMPTS} intentos. Pulsa "Reconectar"; ` +
+          `si el problema persiste, "Volver a vincular".`;
+        this.detail = '';
+        this.status = 'disconnected';
+        console.warn(`[whatsapp:${this.id}] ${this.lastError}`);
+        void this.stop();
+        return;
+      }
+      console.warn(
+        `[whatsapp:${this.id}] stuck at "starting" after ${Math.round(
+          READY_TIMEOUT_MS / 1000,
+        )}s — recycling (attempt ${this.startAttempts}/${MAX_ATTEMPTS})`,
+      );
+      void (async () => {
+        await this.stop();
+        this.start(); // re-cleans the session and re-inits
+      })();
+    }, READY_TIMEOUT_MS);
+  }
+
+  private readonly INSERT = `INSERT OR IGNORE INTO messages
+    (source, wa_account, source_msg_id, chat_id, chat_name, sender, sender_name, direction,
+     body, ts, ingested_at, has_attachment, attachment_mimes, attachment_names, attachment_paths)
+    VALUES (@source, @account, @sid, @chatId, @chatName, @sender, @senderName, @dir,
+     @body, @ts, @now, @hasAtt, @mimes, '', '')`;
+
+  /** Normalize and persist one WhatsApp message. Returns 1 if newly inserted. */
+  private async persist(msg: Message): Promise<number> {
+    try {
+      const selected = getSelectedWaChats(this.id);
+      if (selected.length && msg.id.remote && !selected.includes(msg.id.remote)) return 0;
+
+      const hasMedia = msg.hasMedia;
+      let body = msg.body || '';
+      if (!body && hasMedia) body = `[attachment: ${msg.type}]`;
+      if (!body) return 0;
+
+      const fromMe = msg.fromMe;
+      const sender = fromMe ? 'me' : msg.author || msg.from || null;
+      let senderName: string | null = null;
+      let chatName: string | null = null;
+      try {
+        const chat = await msg.getChat();
+        chatName = chat.name || null;
       } catch {
         /* keep null */
       }
-    }
-
-    const info = db()
-      .prepare(INSERT)
-      .run({
-        source: 'whatsapp',
-        sid: msg.id._serialized,
-        chatId: msg.id.remote ?? null,
-        chatName: chatName ?? senderName ?? sender,
-        sender,
-        senderName,
-        dir: fromMe ? 'outgoing' : 'incoming',
-        body,
-        ts: (msg.timestamp || 0) * 1000,
-        now: Date.now(),
-        hasAtt: hasMedia ? 1 : 0,
-        mimes: hasMedia ? msg.type : '',
-      });
-    return info.changes;
-  } catch {
-    return 0;
-  }
-}
-
-/**
- * If we authenticate but never reach 'ready' within the timeout, recycle the
- * client (up to MAX_ATTEMPTS) instead of hanging on "connecting…" forever. This
- * is the self-recovery for a stuck launch; cleanupSession() in startWhatsApp
- * removes whatever was blocking it on the retry.
- */
-function armReadyWatchdog(): void {
-  if (readyTimer) clearTimeout(readyTimer);
-  readyTimer = setTimeout(() => {
-    if (status === 'ready') return;
-
-    // Authenticated but not ready = WhatsApp is doing its initial history sync
-    // (the phone shows a spinning "linked device" indicator). The FIRST sync of
-    // a busy account can take several minutes. Recycling here would re-link and
-    // restart that sync from scratch — so it might NEVER finish. Be patient:
-    // keep the client alive and just update the status. 'ready' fires when the
-    // sync completes; if it's genuinely wedged, the user can hit "Volver a
-    // vincular" (Re-pair), which is offered in the UI during this state.
-    if (status === 'authenticated') {
-      detail = 'sincronizando — la primera vez puede tardar varios minutos; deja la app abierta y el teléfono conectado';
-      return; // do NOT recycle a sync in progress
-    }
-    // Still waiting for the user to scan the QR — leave it; it auto-refreshes.
-    if (status === 'qr') return;
-
-    // Stuck on 'starting': the browser launched but never even loaded WhatsApp
-    // Web (no QR, no auth). A fresh Chrome usually fixes that — recycle, bounded.
-    if (startAttempts >= MAX_ATTEMPTS) {
-      lastError =
-        `No se pudo cargar WhatsApp tras ${MAX_ATTEMPTS} intentos. Pulsa "Reconectar"; ` +
-        `si el problema persiste, "Volver a vincular".`;
-      detail = '';
-      status = 'disconnected';
-      console.warn('[whatsapp] ' + lastError);
-      void stopWhatsApp();
-      return;
-    }
-    console.warn(
-      `[whatsapp] stuck at "starting" after ${Math.round(READY_TIMEOUT_MS / 1000)}s — recycling (attempt ${startAttempts}/${MAX_ATTEMPTS})`,
-    );
-    void (async () => {
-      await stopWhatsApp();
-      startWhatsApp(); // re-cleans the session and re-inits
-    })();
-  }, READY_TIMEOUT_MS);
-}
-
-/** Start (or no-op if already started) the read-only WhatsApp Web mirror. */
-export function startWhatsApp(): void {
-  if (client) return;
-  // Self-heal: clear any orphaned Chrome / stale locks from a previous (maybe
-  // hard-killed) run before we launch, so we never inherit a locked profile.
-  cleanupSession();
-  startAttempts += 1;
-  status = 'starting';
-  qrDataUrl = null;
-  detail = startAttempts > 1 ? `retrying (attempt ${startAttempts})…` : 'starting browser…';
-  lastError = '';
-
-  // Optional web-version pin. A NEWER build is sometimes needed so a fresh
-  // device link doesn't fail ("Couldn't link device"), but the library only
-  // fully hooks (fires 'ready', captures messages) on the version it was built
-  // for. So: pin a newer version only to LINK; reconnect on the library default
-  // (WA_WEB_VERSION=default) to actually run.
-  const pin = process.env.WA_WEB_VERSION ?? 'default';
-  const usePin = pin.toLowerCase() !== 'default' && pin !== '';
-
-  client = new Client({
-    authStrategy: new LocalAuth({ dataPath: authPath() }),
-    // The web-version cache MUST live in a writable directory. whatsapp-web.js
-    // defaults it to ./.wwebjs_cache (relative to CWD), and a bundled .app runs
-    // with CWD "/" (read-only). Its persist() does fs.mkdirSync/writeFileSync with
-    // NO error handling, so it throws EROFS right AFTER 'authenticated' and BEFORE
-    // 'ready' — leaving the app stuck on "authenticated — syncing" forever (worked
-    // in dev only because CWD was the writable project dir). Point it at our own
-    // writable dataDir so persist() succeeds and 'ready' fires.
-    webVersionCache: usePin
-      ? {
-          type: 'remote' as const,
-          remotePath:
-            'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
+      if (!fromMe) {
+        try {
+          const c = await msg.getContact();
+          senderName = c.pushname || c.name || c.number || null;
+        } catch {
+          /* keep null */
         }
-      : { type: 'local' as const, path: path.join(config.dataDir, 'wwebjs_cache') },
-    ...(usePin ? { webVersion: pin } : {}),
-    puppeteer: {
-      headless: process.env.WA_HEADLESS !== '0',
-      executablePath: chromePath(),
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    },
-  });
+      }
 
-  client.on('qr', async (qr: string) => {
-    if (!everReady) status = 'qr';
-    try {
-      qrDataUrl = await QRCode.toDataURL(qr, { width: 320, margin: 1 });
+      const info = db()
+        .prepare(this.INSERT)
+        .run({
+          source: 'whatsapp',
+          account: this.id,
+          sid: msg.id._serialized,
+          chatId: msg.id.remote ?? null,
+          chatName: chatName ?? senderName ?? sender,
+          sender,
+          senderName,
+          dir: fromMe ? 'outgoing' : 'incoming',
+          body,
+          ts: (msg.timestamp || 0) * 1000,
+          now: Date.now(),
+          hasAtt: hasMedia ? 1 : 0,
+          mimes: hasMedia ? msg.type : '',
+        });
+      return info.changes;
     } catch {
-      qrDataUrl = null;
+      return 0;
     }
-  });
-  client.on('authenticated', () => {
-    // Don't downgrade once we've reached ready — WhatsApp re-emits this on
-    // reconnects and it shouldn't flap the status back.
-    if (!everReady) status = 'authenticated';
-    detail = 'authenticated — syncing…';
-    qrDataUrl = null;
-  });
-  client.on('ready', () => {
-    everReady = true;
-    status = 'ready';
-    qrDataUrl = null;
-    detail = '';
-    lastError = '';
-    startAttempts = 0; // healthy — reset the recycle counter
-    if (readyTimer) clearTimeout(readyTimer), (readyTimer = null);
-    console.log('[whatsapp] ready');
-  });
-  client.on('disconnected', (reason: string) => {
-    everReady = false;
-    status = 'disconnected';
-    detail = '';
-    if (readyTimer) clearTimeout(readyTimer), (readyTimer = null);
-    console.log('[whatsapp] disconnected:', reason);
-  });
-  client.on('change_state', (s: string) => {
-    detail = String(s).toLowerCase();
-    console.log('[whatsapp] state:', s);
-  });
-  client.on('loading_screen', (pct: number, msg: string) => {
-    if (!everReady) detail = `loading ${pct}%${msg ? ` ${msg}` : ''}`;
-    console.log(`[whatsapp] loading ${pct}% ${msg}`);
-  });
-  client.on('auth_failure', (m: string) => {
-    lastError = `Authentication failed: ${m}`;
-    console.log('[whatsapp] auth_failure:', m);
-  });
-  // Fires for both received and sent messages — the read-only mirror.
-  client.on('message_create', (msg: Message) => {
-    void persist(msg);
-  });
-
-  armReadyWatchdog();
-  client.initialize().catch((err: unknown) => {
-    const m = err instanceof Error ? err.message : String(err);
-    console.error('[whatsapp] init failed:', m);
-    lastError = `Launch failed: ${m}`;
-    status = 'disconnected';
-    if (readyTimer) clearTimeout(readyTimer), (readyTimer = null);
-  });
-}
-
-/** Cleanly close the WhatsApp browser (prevents orphaned Chrome on restart). */
-export async function stopWhatsApp(): Promise<void> {
-  if (readyTimer) clearTimeout(readyTimer), (readyTimer = null);
-  if (!client) return;
-  const c = client;
-  client = null;
-  everReady = false;
-  status = 'idle';
-  detail = '';
-  try {
-    // destroy() can hang if the page is wedged — bound it, then force-kill any
-    // Chrome it leaves behind so the next start has a clean profile.
-    await Promise.race([
-      c.destroy(),
-      new Promise((resolve) => setTimeout(resolve, 10_000)),
-    ]);
-  } catch {
-    /* best effort */
   }
-  killOrphanChrome();
-}
 
-/**
- * Hard reset: stop, scrub orphan Chrome + stale locks, reset the attempt
- * counter, and start fresh. Used by the UI "Reconnect" button so the user can
- * recover from a stuck state without touching the terminal.
- */
-export async function resetWhatsApp(): Promise<void> {
-  await stopWhatsApp();
-  cleanupSession();
-  startAttempts = 0;
-  lastError = '';
-  startWhatsApp();
-}
+  /** Start (or no-op if already started) this account's mirror. */
+  start(): void {
+    if (this.client) return;
+    fs.mkdirSync(this.authPath(), { recursive: true });
+    fs.mkdirSync(waCacheDir(this.id), { recursive: true });
+    // Self-heal: clear any orphaned Chrome / stale locks from a previous run
+    // before launching, so we never inherit a locked profile.
+    this.cleanupSession();
+    this.startAttempts += 1;
+    this.status = 'starting';
+    this.qrDataUrl = null;
+    this.detail = this.startAttempts > 1 ? `retrying (attempt ${this.startAttempts})…` : 'starting browser…';
+    this.lastError = '';
 
-/**
- * Re-pair from scratch: stop, scrub orphans/locks, then DELETE the stored
- * session so the next start shows a fresh QR. The reliable escape hatch when the
- * session cache is corrupted (the "stuck at 99%" hang a plain restart can't
- * clear). Loses the current pairing — the user must scan the QR again.
- */
-export async function repairWhatsApp(): Promise<void> {
-  await stopWhatsApp();
-  cleanupSession();
-  try {
-    fs.rmSync(authPath(), { recursive: true, force: true });
-  } catch {
-    /* best effort */
+    // Optional web-version pin. A NEWER build is sometimes needed so a fresh
+    // device link doesn't fail ("Couldn't link device"), but the library only
+    // fully hooks on the version it was built for. Pin a newer version only to
+    // LINK; reconnect on the library default to actually run.
+    const pin = process.env.WA_WEB_VERSION ?? 'default';
+    const usePin = pin.toLowerCase() !== 'default' && pin !== '';
+
+    this.client = new Client({
+      // Each account gets its own dataPath → its own session + browser profile.
+      authStrategy: new LocalAuth({ dataPath: this.authPath() }),
+      // The web-version cache MUST be writable (a bundled .app runs with CWD "/",
+      // read-only). whatsapp-web.js's persist() throws right after 'authenticated'
+      // and before 'ready' otherwise — the classic "authenticated — syncing" hang.
+      // Per-account cache dir so two clients never race on the same files.
+      webVersionCache: usePin
+        ? {
+            type: 'remote' as const,
+            remotePath:
+              'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
+          }
+        : { type: 'local' as const, path: waCacheDir(this.id) },
+      ...(usePin ? { webVersion: pin } : {}),
+      puppeteer: {
+        headless: process.env.WA_HEADLESS !== '0',
+        executablePath: chromePath(),
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      },
+    });
+
+    this.client.on('qr', async (qr: string) => {
+      if (!this.everReady) this.status = 'qr';
+      try {
+        this.qrDataUrl = await QRCode.toDataURL(qr, { width: 320, margin: 1 });
+      } catch {
+        this.qrDataUrl = null;
+      }
+    });
+    this.client.on('authenticated', () => {
+      if (!this.everReady) this.status = 'authenticated';
+      this.detail = 'authenticated — syncing…';
+      this.qrDataUrl = null;
+    });
+    this.client.on('ready', () => {
+      this.everReady = true;
+      this.status = 'ready';
+      this.qrDataUrl = null;
+      this.detail = '';
+      this.lastError = '';
+      this.startAttempts = 0; // healthy — reset the recycle counter
+      if (this.readyTimer) clearTimeout(this.readyTimer), (this.readyTimer = null);
+      void this.captureIdentity();
+      console.log(`[whatsapp:${this.id}] ready`);
+    });
+    this.client.on('disconnected', (reason: string) => {
+      this.everReady = false;
+      this.status = 'disconnected';
+      this.detail = '';
+      if (this.readyTimer) clearTimeout(this.readyTimer), (this.readyTimer = null);
+      console.log(`[whatsapp:${this.id}] disconnected:`, reason);
+    });
+    this.client.on('change_state', (s: string) => {
+      this.detail = String(s).toLowerCase();
+      console.log(`[whatsapp:${this.id}] state:`, s);
+    });
+    this.client.on('loading_screen', (pct: number, msg: string) => {
+      if (!this.everReady) this.detail = `loading ${pct}%${msg ? ` ${msg}` : ''}`;
+      console.log(`[whatsapp:${this.id}] loading ${pct}% ${msg}`);
+    });
+    this.client.on('auth_failure', (m: string) => {
+      this.lastError = `Authentication failed: ${m}`;
+      console.log(`[whatsapp:${this.id}] auth_failure:`, m);
+    });
+    // Fires for both received and sent messages — the read-only mirror.
+    this.client.on('message_create', (msg: Message) => {
+      void this.persist(msg);
+    });
+
+    this.armReadyWatchdog();
+    this.client.initialize().catch((err: unknown) => {
+      const m = err instanceof Error ? err.message : String(err);
+      console.error(`[whatsapp:${this.id}] init failed:`, m);
+      this.lastError = `Launch failed: ${m}`;
+      this.status = 'disconnected';
+      if (this.readyTimer) clearTimeout(this.readyTimer), (this.readyTimer = null);
+    });
   }
-  startAttempts = 0;
-  lastError = '';
-  everReady = false;
-  startWhatsApp();
+
+  /** Cleanly close this account's browser (prevents orphaned Chrome). */
+  async stop(): Promise<void> {
+    if (this.readyTimer) clearTimeout(this.readyTimer), (this.readyTimer = null);
+    if (!this.client) return;
+    const c = this.client;
+    this.client = null;
+    this.everReady = false;
+    this.status = 'idle';
+    this.detail = '';
+    try {
+      await Promise.race([c.destroy(), new Promise((resolve) => setTimeout(resolve, 10_000))]);
+    } catch {
+      /* best effort */
+    }
+    this.killOrphanChrome();
+  }
+
+  /** Hard reset: stop, scrub orphans/locks, reset the attempt counter, restart. */
+  async reset(): Promise<void> {
+    await this.stop();
+    this.cleanupSession();
+    this.startAttempts = 0;
+    this.lastError = '';
+    this.start();
+  }
+
+  /** Re-pair: stop, scrub, DELETE the stored session so a fresh QR is shown. */
+  async repair(): Promise<void> {
+    await this.stop();
+    this.cleanupSession();
+    try {
+      fs.rmSync(this.authPath(), { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+    this.startAttempts = 0;
+    this.lastError = '';
+    this.everReady = false;
+    this.start();
+  }
+
+  /** Wipe this account's on-disk session + cache (used when removing it). */
+  wipeSession(): void {
+    try {
+      fs.rmSync(this.authPath(), { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+    try {
+      fs.rmSync(waCacheDir(this.id), { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+
+  isReady(): boolean {
+    return this.status === 'ready';
+  }
+
+  /** List this account's chats for the selection UI (requires ready). */
+  async listChats(): Promise<WaChatInfo[]> {
+    if (!this.client || this.status !== 'ready') return [];
+    const chats = await this.client.getChats();
+    return chats.map((c) => ({
+      id: c.id._serialized,
+      name: c.name || c.id.user || c.id._serialized,
+      isGroup: c.isGroup,
+    }));
+  }
+
+  /** Backfill recent history from selected chats (empty selection = all). */
+  async backfill(perChat = 50): Promise<{ inserted: number; chats: number }> {
+    if (!this.client || this.status !== 'ready') return { inserted: 0, chats: 0 };
+    const selected = getSelectedWaChats(this.id);
+    const chats = (await this.client.getChats()).filter(
+      (c) => !selected.length || selected.includes(c.id._serialized),
+    );
+    let inserted = 0;
+    for (const chat of chats) {
+      try {
+        const msgs = await chat.fetchMessages({ limit: perChat });
+        for (const m of msgs) inserted += await this.persist(m);
+      } catch {
+        /* skip a problematic chat */
+      }
+    }
+    return { inserted, chats: chats.length };
+  }
 }
 
 export interface WaChatInfo {
@@ -386,32 +478,121 @@ export interface WaChatInfo {
   isGroup: boolean;
 }
 
-/** List the connected account's chats for the selection UI (requires ready). */
-export async function listWaChats(): Promise<WaChatInfo[]> {
-  if (!client || status !== 'ready') return [];
-  const chats = await client.getChats();
-  return chats.map((c) => ({
-    id: c.id._serialized,
-    name: c.name || c.id.user || c.id._serialized,
-    isGroup: c.isGroup,
-  }));
-}
+// ─────────────────────────────── manager ───────────────────────────────
+// A registry of live WaAccount instances, hydrated from the settings registry.
 
-/** Backfill recent history from selected chats (empty selection = all). */
-export async function backfillWhatsApp(perChat = 50): Promise<{ inserted: number; chats: number }> {
-  if (!client || status !== 'ready') return { inserted: 0, chats: 0 };
-  const selected = getSelectedWaChats();
-  const chats = (await client.getChats()).filter(
-    (c) => !selected.length || selected.includes(c.id._serialized),
-  );
-  let inserted = 0;
-  for (const chat of chats) {
-    try {
-      const msgs = await chat.fetchMessages({ limit: perChat });
-      for (const m of msgs) inserted += await persist(m);
-    } catch {
-      /* skip a problematic chat */
+const accounts = new Map<string, WaAccount>();
+
+function hydrate(): void {
+  for (const meta of listWaAccounts()) {
+    const existing = accounts.get(meta.id);
+    if (existing) {
+      existing.authDir = meta.authDir; // keep path in sync with the registry
+    } else {
+      accounts.set(meta.id, new WaAccount(meta));
     }
   }
-  return { inserted, chats: chats.length };
 }
+
+function get(id: string): WaAccount | null {
+  hydrate();
+  return accounts.get(id) ?? null;
+}
+
+/** All accounts' states for the UI. */
+export function listAccountStates(): WaState[] {
+  hydrate();
+  return [...accounts.values()].map((a) => a.state());
+}
+
+export function getAccountState(id: string): WaState | null {
+  return get(id)?.state() ?? null;
+}
+
+/** Add a new account slot, start pairing, and return its state. */
+export function addAccount(): WaState {
+  const meta = addWaAccount();
+  const a = new WaAccount(meta);
+  accounts.set(meta.id, a);
+  a.start();
+  return a.state();
+}
+
+/** Remove an account: stop it, wipe its session, drop it from the registry. */
+export async function removeAccount(id: string): Promise<void> {
+  const a = get(id);
+  if (a) {
+    await a.stop();
+    a.wipeSession();
+    accounts.delete(id);
+  }
+  removeWaAccount(id);
+}
+
+/** Rename (custom label) an account; pass '' to clear back to auto. */
+export function renameAccount(id: string, label: string): WaState | null {
+  setWaLabel(id, label);
+  return get(id)?.state() ?? null;
+}
+
+export function startAccount(id: string): WaState | null {
+  const a = get(id);
+  a?.start();
+  return a?.state() ?? null;
+}
+
+export async function resetAccount(id: string): Promise<WaState | null> {
+  const a = get(id);
+  if (a) await a.reset();
+  return a?.state() ?? null;
+}
+
+export async function repairAccount(id: string): Promise<WaState | null> {
+  const a = get(id);
+  if (a) await a.repair();
+  return a?.state() ?? null;
+}
+
+export async function backfillAccount(
+  id: string,
+  perChat = 50,
+): Promise<{ inserted: number; chats: number }> {
+  const a = get(id);
+  if (!a) return { inserted: 0, chats: 0 };
+  return a.backfill(perChat);
+}
+
+export async function listAccountChats(id: string): Promise<WaChatInfo[]> {
+  const a = get(id);
+  if (!a) return [];
+  return a.listChats();
+}
+
+export function accountIsReady(id: string): boolean {
+  return get(id)?.isReady() ?? false;
+}
+
+/** Start every registered account that already has a paired session (boot). */
+export function startAllSessions(): void {
+  hydrate();
+  for (const a of accounts.values()) if (a.hasSession()) a.start();
+}
+
+/** Stop every account cleanly (shutdown / sleep). */
+export async function stopAllAccounts(): Promise<void> {
+  hydrate();
+  await Promise.all([...accounts.values()].map((a) => a.stop()));
+}
+
+/** True if any account has a paired session (used to decide boot reconnect). */
+export function anyWaSession(): boolean {
+  hydrate();
+  return [...accounts.values()].some((a) => a.hasSession());
+}
+
+// ── Back-compat aliases: the installed Electron shell imports these names from
+// the compiled client.js for graceful shutdown / relaunch. stopWhatsApp now
+// stops ALL accounts, so the existing shell still closes both browsers cleanly
+// on quit without needing a new .app.
+export const stopWhatsApp = stopAllAccounts;
+export const startWhatsApp = startAllSessions;

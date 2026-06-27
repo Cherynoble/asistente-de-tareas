@@ -10,7 +10,7 @@
 // missing or older, and symlink its node_modules to the bundle's, so an online
 // update only has to drop new dist/+public/ files there — no repackaging, no
 // re-signing, and the database (one level up, in DadsApp/) is never touched.
-const { app, BrowserWindow, shell, dialog, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, dialog, Menu, ipcMain, powerMonitor } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -250,6 +250,31 @@ if (!app.requestSingleInstanceLock()) {
     createWindow();
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+
+    // Sleep/wake handling. macOS can kill the puppeteer Chrome when the Mac
+    // sleeps (lid closed), which corrupts the WhatsApp session and leaves it
+    // "signed out" / stuck on the next wake. So: BEFORE sleep, close the WhatsApp
+    // browsers cleanly (stopWhatsApp now stops every account); AFTER wake,
+    // reconnect them all. This is the proper fix for "laptop closed → WhatsApp
+    // signed out and auto sign-in doesn't work". (The server also has a
+    // wall-clock wake detector as a fallback when this shell isn't present.)
+    powerMonitor.on('suspend', () => {
+      try {
+        if (waClient && waClient.stopWhatsApp) waClient.stopWhatsApp();
+      } catch {
+        /* best effort */
+      }
+    });
+    powerMonitor.on('resume', () => {
+      // Give the network a moment to come back before relaunching the browsers.
+      setTimeout(() => {
+        try {
+          if (waClient && waClient.startWhatsApp) waClient.startWhatsApp();
+        } catch {
+          /* best effort */
+        }
+      }, 4000);
     });
   });
 

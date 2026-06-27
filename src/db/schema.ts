@@ -7,6 +7,7 @@ export const SCHEMA = /* sql */ `
 CREATE TABLE IF NOT EXISTS messages (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   source        TEXT    NOT NULL,            -- 'imessage' | 'whatsapp'
+  wa_account    TEXT,                         -- which WhatsApp account (id) captured it; NULL = imessage/legacy
   source_msg_id TEXT    NOT NULL,            -- stable id from the source, for dedup
   chat_id       TEXT,                        -- conversation/group id
   chat_name     TEXT,                        -- human-readable chat/group name

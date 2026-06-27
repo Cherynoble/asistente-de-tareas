@@ -202,9 +202,12 @@
         </div>
 
         <div class="setblock" id="wa-block">
-          <h3>WhatsApp <span id="wa-status" class="badge">…</span></h3>
-          <p class="hint">Un espejo de solo lectura de tu WhatsApp — nunca envía mensajes. Para vincular: en tu teléfono abre WhatsApp → Ajustes → Dispositivos vinculados → Vincular un dispositivo, y escanea el QR.</p>
-          <div id="wa-body"></div>
+          <h3>Cuentas de WhatsApp</h3>
+          <p class="hint">Espejos de solo lectura de tu WhatsApp — nunca envían mensajes. Puedes conectar varias cuentas (números) a la vez. Para vincular cada una: en ese teléfono abre WhatsApp → Ajustes → Dispositivos vinculados → Vincular un dispositivo, y escanea el QR.</p>
+          <div id="wa-accounts"></div>
+          <div class="setrow">
+            <button id="wa-add" class="primary">+ Agregar cuenta de WhatsApp</button>
+          </div>
         </div>
 
         <div class="setblock">
@@ -257,17 +260,6 @@
           </div>
         </div>
 
-        <div class="setblock">
-          <h3>Chats de WhatsApp a incluir</h3>
-          <p class="hint" id="wachats-note">Elige de qué conversaciones de WhatsApp extraer tareas. Sin selección = todos los chats.</p>
-          <input class="search" id="wachats-search" placeholder="Buscar chat por nombre o número…" />
-          <div id="wachats-list" class="chatsel"></div>
-          <div class="setrow">
-            <button id="save-wachats" class="primary">Guardar selección</button>
-            <button id="clear-wachats">Incluir todos</button>
-            <span id="wachats-saved" class="saved"></span>
-          </div>
-        </div>
       </section>
     </main>
 

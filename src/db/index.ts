@@ -36,7 +36,12 @@ function migrate(d: Database.Database): void {
   ensureColumn(d, 'messages', 'attachment_mimes', `TEXT NOT NULL DEFAULT ''`);
   ensureColumn(d, 'messages', 'attachment_names', `TEXT NOT NULL DEFAULT ''`);
   ensureColumn(d, 'messages', 'attachment_paths', `TEXT NOT NULL DEFAULT ''`);
+  ensureColumn(d, 'messages', 'wa_account', 'TEXT'); // multi-account WhatsApp tag (0.4.0)
   // tasks: columns added across passes (extraction, reminders, archive, trash).
+  // client_id is indexed by SCHEMA (idx_tasks_client), so it MUST exist before
+  // exec(SCHEMA) or the CREATE INDEX crashes on a sufficiently old DB — same
+  // failure mode as the messages.processed index fixed in 0.3.2.
+  ensureColumn(d, 'tasks', 'client_id', 'INTEGER');
   ensureColumn(d, 'tasks', 'source_quote', `TEXT NOT NULL DEFAULT ''`);
   ensureColumn(d, 'tasks', 'due_at', 'INTEGER');
   ensureColumn(d, 'tasks', 'last_nudge_at', 'INTEGER');
