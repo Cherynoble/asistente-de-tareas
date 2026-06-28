@@ -1246,6 +1246,8 @@ function renderWaCard(st) {
     const d = st.detail ? esc(st.detail) : 'abriendo un navegador en segundo plano, ~10–20 s';
     const attempt = st.attempts > 1 ? ` <span class="muted">(intento ${st.attempts})</span>` : '';
     body.append(el(`<div class="hint">conectando… ${d}${attempt}</div>`));
+    // A wedged sync that exhausted auto-recovery sets lastError with guidance.
+    if (st.lastError) body.append(el(`<div class="hint err">⚠️ ${esc(st.lastError)}</div>`));
     body.append(waRecoveryRow(id));
   } else {
     if (st.lastError) body.append(el(`<div class="hint err">⚠️ ${esc(st.lastError)}</div>`));

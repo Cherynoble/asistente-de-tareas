@@ -31,6 +31,14 @@ const READY_TIMEOUT_MS = Number(process.env.WA_READY_TIMEOUT_MS ?? 90_000);
 // session cache is usually corrupted — recycling just re-links and thrashes, so
 // we stop and tell the user to Re-pair instead.
 const MAX_ATTEMPTS = Number(process.env.WA_MAX_ATTEMPTS ?? 2);
+// Wedged-sync recovery: a busy account's first history sync can take minutes and
+// is left strictly alone WHILE it makes progress (loading % advances, state
+// changes, messages arrive). But if it sits in 'authenticated' with NO progress
+// at all for this long, the sync is genuinely stuck (the classic "loading 99%"
+// wedge) — we auto-recover it (reset keeps the session, no QR), bounded so a
+// pathological account can't loop forever; after that we ask the user to re-pair.
+const SYNC_STALL_MS = Number(process.env.WA_SYNC_STALL_MS ?? 5 * 60_000);
+const MAX_SYNC_RECYCLES = Number(process.env.WA_MAX_SYNC_RECYCLES ?? 2);
 
 export interface WaState {
   id: string;
@@ -70,6 +78,12 @@ class WaAccount {
   private lastError = '';
   private readyTimer: ReturnType<typeof setTimeout> | null = null;
   private startAttempts = 0;
+  // Wedged-sync detection (see SYNC_STALL_MS): a recurring watchdog armed on
+  // 'authenticated' that only fires when the sync stops making progress.
+  private syncTimer: ReturnType<typeof setInterval> | null = null;
+  private lastProgressAt = 0;
+  private lastLoadingPct = -1;
+  private syncRecycles = 0;
 
   constructor(meta: WaAccountMeta) {
     this.id = meta.id;
@@ -222,6 +236,52 @@ class WaAccount {
     }, READY_TIMEOUT_MS);
   }
 
+  /** Note that the sync made progress (loading %, state change, or a message). */
+  private markSyncProgress(): void {
+    this.lastProgressAt = Date.now();
+  }
+
+  private clearSyncWatchdog(): void {
+    if (this.syncTimer) {
+      clearInterval(this.syncTimer);
+      this.syncTimer = null;
+    }
+  }
+
+  /**
+   * Police a stalled history sync. Armed when we reach 'authenticated'; checks
+   * once a minute. A sync that is still advancing (markSyncProgress keeps
+   * lastProgressAt fresh) is left completely alone — only one that has frozen for
+   * SYNC_STALL_MS is recovered, and only MAX_SYNC_RECYCLES times before we hand
+   * off to the user. reset() keeps the stored session, so recovery needs no QR.
+   */
+  private armSyncWatchdog(): void {
+    if (this.syncTimer) return;
+    this.markSyncProgress();
+    this.syncTimer = setInterval(() => {
+      if (this.status === 'ready') return this.clearSyncWatchdog();
+      if (this.status !== 'authenticated') return; // only police a live sync
+      const stalledFor = Date.now() - this.lastProgressAt;
+      if (stalledFor < SYNC_STALL_MS) return; // still making progress — be patient
+
+      if (this.syncRecycles >= MAX_SYNC_RECYCLES) {
+        this.lastError =
+          'La sincronización se quedó atascada. Pulsa "Volver a vincular" para reconectar esta cuenta.';
+        this.detail = '';
+        this.clearSyncWatchdog();
+        console.warn(`[whatsapp:${this.id}] sync wedged after ${MAX_SYNC_RECYCLES} recoveries — needs re-pair`);
+        return;
+      }
+      this.syncRecycles += 1; // bound persists across reset() so this can't loop
+      console.warn(
+        `[whatsapp:${this.id}] sync stalled ${Math.round(stalledFor / 1000)}s with no progress — ` +
+          `auto-recovering (${this.syncRecycles}/${MAX_SYNC_RECYCLES})`,
+      );
+      this.clearSyncWatchdog();
+      void this.reset(); // scrub orphan Chrome + relaunch; keeps the session (no QR)
+    }, 60_000);
+  }
+
   private readonly INSERT = `INSERT OR IGNORE INTO messages
     (source, wa_account, source_msg_id, chat_id, chat_name, sender, sender_name, direction,
      body, ts, ingested_at, has_attachment, attachment_mimes, attachment_names, attachment_paths)
@@ -294,6 +354,7 @@ class WaAccount {
     this.qrDataUrl = null;
     this.detail = this.startAttempts > 1 ? `retrying (attempt ${this.startAttempts})…` : 'starting browser…';
     this.lastError = '';
+    this.lastLoadingPct = -1; // fresh sync — first loading % counts as progress
 
     // Optional web-version pin. A NEWER build is sometimes needed so a fresh
     // device link doesn't fail ("Couldn't link device"), but the library only
@@ -336,6 +397,7 @@ class WaAccount {
       if (!this.everReady) this.status = 'authenticated';
       this.detail = 'authenticated — syncing…';
       this.qrDataUrl = null;
+      this.armSyncWatchdog(); // start policing a possibly-wedged history sync
     });
     this.client.on('ready', () => {
       this.everReady = true;
@@ -344,6 +406,8 @@ class WaAccount {
       this.detail = '';
       this.lastError = '';
       this.startAttempts = 0; // healthy — reset the recycle counter
+      this.syncRecycles = 0; // a completed sync proves health
+      this.clearSyncWatchdog();
       if (this.readyTimer) clearTimeout(this.readyTimer), (this.readyTimer = null);
       void this.captureIdentity();
       console.log(`[whatsapp:${this.id}] ready`);
@@ -352,15 +416,23 @@ class WaAccount {
       this.everReady = false;
       this.status = 'disconnected';
       this.detail = '';
+      this.clearSyncWatchdog();
       if (this.readyTimer) clearTimeout(this.readyTimer), (this.readyTimer = null);
       console.log(`[whatsapp:${this.id}] disconnected:`, reason);
     });
     this.client.on('change_state', (s: string) => {
       this.detail = String(s).toLowerCase();
+      this.markSyncProgress(); // a state transition means the sync is alive
       console.log(`[whatsapp:${this.id}] state:`, s);
     });
     this.client.on('loading_screen', (pct: number, msg: string) => {
       if (!this.everReady) this.detail = `loading ${pct}%${msg ? ` ${msg}` : ''}`;
+      // A changing percentage is real progress; a frozen one is not (don't keep
+      // the watchdog alive on a stuck "loading 99%").
+      if (pct !== this.lastLoadingPct) {
+        this.lastLoadingPct = pct;
+        this.markSyncProgress();
+      }
       console.log(`[whatsapp:${this.id}] loading ${pct}% ${msg}`);
     });
     this.client.on('auth_failure', (m: string) => {
@@ -369,6 +441,7 @@ class WaAccount {
     });
     // Fires for both received and sent messages — the read-only mirror.
     this.client.on('message_create', (msg: Message) => {
+      this.markSyncProgress(); // messages flowing = the connection is working
       void this.persist(msg);
     });
 
@@ -385,6 +458,7 @@ class WaAccount {
   /** Cleanly close this account's browser (prevents orphaned Chrome). */
   async stop(): Promise<void> {
     if (this.readyTimer) clearTimeout(this.readyTimer), (this.readyTimer = null);
+    this.clearSyncWatchdog();
     if (!this.client) return;
     const c = this.client;
     this.client = null;
@@ -418,6 +492,7 @@ class WaAccount {
       /* best effort */
     }
     this.startAttempts = 0;
+    this.syncRecycles = 0; // explicit user re-pair — fresh slate for sync recovery
     this.lastError = '';
     this.everReady = false;
     this.start();
