@@ -462,24 +462,29 @@ function startStream(url, statusEl, onDone) {
   resetFeeds();
   counters.msgs = counters.vis = counters.tasks = 0;
   statusEl.textContent = 'iniciando…';
+  // Run completion is funneled through finish() so a normal end, a server error,
+  // and a dropped connection all close the stream and refresh the views exactly
+  // once — a mid-run drop no longer freezes the status text forever.
+  let finished = false;
   const es = new EventSource(url);
+  const finish = (msg) => {
+    if (finished) return;
+    finished = true;
+    if (msg) statusEl.textContent = msg;
+    es.close();
+    onDone();
+  };
   es.onmessage = (ev) => {
     const e = JSON.parse(ev.data);
     if (e.type === 'start') statusEl.textContent = `leyendo ${e.total} mensajes${e.vision ? ', visión activada' : ''}…`;
     else if (e.type === 'batch') statusEl.textContent = `procesados ${e.processed}/${e.total} · ${e.proposed} propuestas…`;
     else if (e.type === 'done') {
-      statusEl.textContent = `listo — ${e.proposed} tarea(s) propuesta(s)`;
       if (!counters.tasks) $('#task-feed').append(el('<div class="empty">No se encontraron tareas.</div>'));
-      es.close();
-      onDone();
+      finish(`listo — ${e.proposed} tarea(s) propuesta(s)`);
     } else handleEvent(e);
   };
-  es.addEventListener('failed', (ev) => {
-    statusEl.textContent = 'error: ' + JSON.parse(ev.data).message;
-    es.close();
-    onDone();
-  });
-  es.onerror = () => es.close();
+  es.addEventListener('failed', (ev) => finish('error: ' + JSON.parse(ev.data).message));
+  es.onerror = () => finish('se interrumpió la conexión — vuelve a intentarlo');
   return es;
 }
 

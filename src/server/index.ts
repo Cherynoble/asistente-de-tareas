@@ -76,6 +76,37 @@ const app = express();
 app.use(express.json({ limit: '30mb' })); // base64 image/PDF uploads in chat
 app.use(express.static(PUBLIC_DIR));
 
+/**
+ * SSE writer that survives the client disconnecting mid-stream. If the user
+ * closes the window or switches tabs while a long extraction is running, the
+ * socket dies; writing to it then can throw EPIPE and (without this guard) crash
+ * the always-on server. We stop writing once the request closes or the response
+ * ends, and swallow late socket errors.
+ */
+function sseSender(req: express.Request, res: express.Response) {
+  let gone = false;
+  const stop = () => {
+    gone = true;
+  };
+  req.on('close', stop);
+  res.on('error', stop);
+  const write = (raw: string) => {
+    if (gone || res.writableEnded) return;
+    try {
+      res.write(raw);
+    } catch {
+      gone = true;
+    }
+  };
+  return {
+    send: (e: ActivityEvent) => write(`data: ${JSON.stringify(e)}\n\n`),
+    fail: (message: string) => write(`event: failed\ndata: ${JSON.stringify({ message })}\n\n`),
+    get closed() {
+      return gone;
+    },
+  };
+}
+
 /** Proposed tasks awaiting review, with the message that triggered each. */
 app.get('/api/inbox', (_req, res) => {
   const rows = db()
@@ -791,16 +822,14 @@ app.get('/api/extract/stream', async (req, res) => {
   const vision = req.query.vision === '1';
   // Clamp the per-run vision cap to a sane range to bound cost.
   const visionCap = Math.min(Math.max(Number(req.query.cap ?? 10), 1), 50);
-  const send = (e: ActivityEvent) => res.write(`data: ${JSON.stringify(e)}\n\n`);
+  const sse = sseSender(req, res);
 
   try {
-    await runExtraction({ limit, vision, visionCap, onEvent: send });
+    await runExtraction({ limit, vision, visionCap, onEvent: sse.send });
   } catch (err) {
-    res.write(
-      `event: failed\ndata: ${JSON.stringify({ message: err instanceof Error ? err.message : String(err) })}\n\n`,
-    );
+    sse.fail(err instanceof Error ? err.message : String(err));
   } finally {
-    res.end();
+    if (!res.writableEnded) res.end();
   }
 });
 
@@ -833,18 +862,16 @@ app.get('/api/process/stream', async (req, res) => {
   const vision = req.query.vision === '1';
   const visionCap = Math.min(Math.max(Number(req.query.cap ?? 15), 0), 100);
   const maxBatches = Math.min(Math.max(Number(req.query.maxBatches ?? 10), 1), 100);
-  const send = (e: ActivityEvent) => res.write(`data: ${JSON.stringify(e)}\n\n`);
+  const sse = sseSender(req, res);
 
   try {
     // Pull anything new first (cheap; deduped), so "process new" sees today's messages.
     ingestSafely();
-    await processNewMessages({ vision, visionCap, maxBatches, onEvent: send });
+    await processNewMessages({ vision, visionCap, maxBatches, onEvent: sse.send });
   } catch (err) {
-    res.write(
-      `event: failed\ndata: ${JSON.stringify({ message: err instanceof Error ? err.message : String(err) })}\n\n`,
-    );
+    sse.fail(err instanceof Error ? err.message : String(err));
   } finally {
-    res.end();
+    if (!res.writableEnded) res.end();
   }
 });
 
@@ -911,6 +938,14 @@ function startNudgeLoop(): void {
 // Log it and keep serving — our own async paths are already guarded.
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason instanceof Error ? reason.message : reason);
+});
+
+// Same philosophy for a synchronous throw that escaped a callback (e.g. an EPIPE
+// from writing to a socket the user just closed, or a library internal): log and
+// keep serving rather than letting the always-on app die and drop the WhatsApp
+// sessions. Our own request/DB paths are guarded; this is the last-resort net.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err instanceof Error ? err.message : err);
 });
 
 // Close the WhatsApp browser cleanly on shutdown so it doesn't leave an
