@@ -1121,6 +1121,8 @@ $('#clear-chats').addEventListener('click', () => saveChatSelection([]));
 // ---- WhatsApp accounts (multi-account) ----
 let waPollTimer = null;
 const waExpanded = new Set(); // account ids whose chat picker is open
+const waPickerNodes = new Map(); // id -> the picker DOM node (reused across re-renders so it doesn't flicker)
+const waChatsLoaded = new Set(); // ids whose picker has already been populated (don't reload on every poll)
 
 function waBadgeHtml(status) {
   const cls =
@@ -1169,8 +1171,11 @@ async function loadWaAccounts() {
       if (document.querySelector('#settings').classList.contains('active')) loadWaAccounts();
     }, 2500);
   }
-  // Re-open any chat pickers the user had expanded.
-  for (const id of waExpanded) loadAccountChats(id);
+  // Re-open any chat pickers the user had expanded. Only (re)fetch chats for a
+  // picker that hasn't been populated yet — re-rendering reuses the cached node
+  // (renderWaCard), so an already-loaded picker survives a poll-driven rebuild
+  // without flickering back to its "Cargando…" placeholder.
+  for (const id of waExpanded) if (!waChatsLoaded.has(id)) loadAccountChats(id);
 }
 
 function renderWaCard(st) {
@@ -1205,14 +1210,28 @@ function renderWaCard(st) {
     };
     const pick = el('<button>Elegir chats a incluir</button>');
     pick.onclick = () => {
-      if (waExpanded.has(id)) waExpanded.delete(id);
-      else waExpanded.add(id);
+      if (waExpanded.has(id)) {
+        waExpanded.delete(id);
+        waPickerNodes.delete(id); // drop cache so a later re-open reloads fresh
+        waChatsLoaded.delete(id);
+      } else {
+        waExpanded.add(id);
+      }
       loadWaAccounts();
     };
     row.append(bf, pick, bfStatus);
     body.append(row);
-    // Per-account chat picker (filled by loadAccountChats when expanded).
-    if (waExpanded.has(id)) body.append(renderWaChatPicker(id));
+    // Per-account chat picker (filled by loadAccountChats when expanded). Reuse
+    // the cached node so a poll-driven card rebuild moves the already-populated
+    // picker instead of recreating an empty one (the flicker fix).
+    if (waExpanded.has(id)) {
+      let picker = waPickerNodes.get(id);
+      if (!picker) {
+        picker = renderWaChatPicker(id);
+        waPickerNodes.set(id, picker);
+      }
+      body.append(picker);
+    }
   } else if (st.status === 'qr' && st.qrDataUrl) {
     body.append(
       el(`<div><img class="wa-qr" src="${st.qrDataUrl}" alt="QR de WhatsApp" />
@@ -1260,11 +1279,15 @@ async function waStart(id) {
   setTimeout(loadWaAccounts, 1200);
 }
 async function waReset(id) {
+  waPickerNodes.delete(id);
+  waChatsLoaded.delete(id);
   await fetch(`/api/whatsapp/accounts/${id}/reset`, { method: 'POST' }).catch(() => {});
   setTimeout(loadWaAccounts, 1500);
 }
 async function waRepair(id) {
   if (!confirm('¿Reiniciar esta cuenta y escanear un nuevo código QR? Esto borra la vinculación actual de esta cuenta.')) return;
+  waPickerNodes.delete(id);
+  waChatsLoaded.delete(id);
   await fetch(`/api/whatsapp/accounts/${id}/repair`, { method: 'POST' }).catch(() => {});
   setTimeout(loadWaAccounts, 1500);
 }
@@ -1281,6 +1304,8 @@ async function waRename(id, current) {
 async function waRemove(id, label) {
   if (!confirm(`¿Quitar la cuenta "${label}"? Se cierra y se borra su vinculación (los mensajes ya guardados se conservan).`)) return;
   waExpanded.delete(id);
+  waPickerNodes.delete(id);
+  waChatsLoaded.delete(id);
   await fetch(`/api/whatsapp/accounts/${id}`, { method: 'DELETE' }).catch(() => {});
   loadWaAccounts();
 }
@@ -1319,8 +1344,10 @@ async function loadAccountChats(id) {
   if (!data.ready) {
     list.innerHTML = '<div class="empty">Conecta esta cuenta para elegir sus chats.</div>';
     if (note) note.textContent = '';
+    waChatsLoaded.delete(id); // not loaded yet — let a later poll retry once ready
     return;
   }
+  waChatsLoaded.add(id); // populated — poll-driven rebuilds will now reuse this node
   if (note)
     note.textContent = data.filtering
       ? 'Solo se incluyen los chats marcados de esta cuenta.'
