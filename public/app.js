@@ -9,6 +9,13 @@ const esc = (s) =>
 // Short Spanish date for "task generated on" labels.
 const fmtGen = (ms) =>
   ms ? new Date(ms).toLocaleDateString('es', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
+// Compact date + time a message was sent (feed rows can span many days).
+const fmtMsgTime = (ms) =>
+  ms
+    ? new Date(ms).toLocaleString('es', {
+        day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit',
+      })
+    : '';
 
 // Spanish labels for task statuses and WhatsApp connection states.
 const STATUS_LABELS = { proposed: 'propuesta', todo: 'por hacer', waiting: 'en espera', done: 'hecho', dismissed: 'descartada' };
@@ -435,19 +442,22 @@ function handleEvent(e) {
     $('#msg-count').textContent = counters.msgs;
     const who = e.direction === 'outgoing' ? 'yo →' : esc(prettySender(e.sender, e.senderName));
     // Inline thumbnails / PDF chips for any image or PDF attachment we have a file for.
+    // Inline thumbnails / PDF chips. Broken images (e.g. WhatsApp media that
+    // can't be fetched on demand) remove themselves via onerror.
     const atts = (e.attachments || [])
       .map((a) =>
         a.mime === 'application/pdf'
           ? `<a class="matt pdf" href="/api/attachment?id=${e.id}&i=${a.index}" target="_blank" rel="noopener">📄 PDF</a>`
-          : `<img class="matt" loading="lazy" src="/api/attachment?id=${e.id}&i=${a.index}" alt="" />`,
+          : `<img class="matt" loading="lazy" onerror="this.remove()" src="/api/attachment?id=${e.id}&i=${a.index}" alt="" />`,
       )
       .join('');
     // If the body is only the "[attachment: …]" placeholder and we're showing the
     // real attachment, drop the redundant placeholder text.
     const isMarker = /^\[attachment: .*\]$/.test(e.body || '');
     const clip = atts && isMarker ? '' : `<div class="clip">${esc(e.body)}</div>`;
+    const when = e.ts ? `<span class="mwhen">${esc(fmtMsgTime(e.ts))}</span>` : '';
     $('#msg-feed').append(el(`<div class="mrow ${e.direction === 'outgoing' ? 'out' : ''}">
-      <div class="who"><span>${sourceBadge(e.source)}${accountBadge(e.source, e.waAccount)} ${who}</span>${e.hasAttachment ? '<span class="paperclip">📎</span>' : ''}</div>
+      <div class="who"><span>${sourceBadge(e.source)}${accountBadge(e.source, e.waAccount)} ${who}</span><span class="mmeta">${when}${e.hasAttachment ? '<span class="paperclip">📎</span>' : ''}</span></div>
       ${clip}${atts ? `<div class="matts">${atts}</div>` : ''}</div>`));
   } else if (e.type === 'vision') {
     counters.vis++;
@@ -501,7 +511,10 @@ function startStream(url, statusEl, onDone) {
 }
 
 $('#process').addEventListener('click', () => {
-  startStream(`/api/process/stream?vision=1&cap=15`, $('#proc-status'), () => {
+  // cap=1000 ≈ "analyze every new image/PDF" — the run is already bounded by the
+  // number of unprocessed messages per click. The "Imágenes y PDF analizados"
+  // counter shows how many were actually analyzed.
+  startStream(`/api/process/stream?vision=1&cap=1000`, $('#proc-status'), () => {
     loadInbox();
     loadStats();
   });

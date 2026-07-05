@@ -593,6 +593,32 @@ class WaAccount {
     return this.status === 'ready';
   }
 
+  /**
+   * On-demand media fetch for a stored message that has no downloaded file yet
+   * (captured before media download existed, or an earlier download failed).
+   * Requires the account connected; fetches the message live, saves the media,
+   * updates the row so future requests hit the file directly. Returns the file
+   * or null (media gone / not an image·PDF / account offline).
+   */
+  async downloadMediaById(sid: string): Promise<{ mime: string; path: string } | null> {
+    if (!this.client || this.status !== 'ready') return null;
+    try {
+      const msg = await this.client.getMessageById(sid);
+      if (!msg || !msg.hasMedia) return null;
+      const saved = await this.saveMedia(msg);
+      if (!saved) return null;
+      db()
+        .prepare(
+          `UPDATE messages SET attachment_mimes=?, attachment_names=?, attachment_paths=?
+           WHERE source='whatsapp' AND source_msg_id=?`,
+        )
+        .run(saved.mime, saved.name, saved.path, sid);
+      return { mime: saved.mime, path: saved.path };
+    } catch {
+      return null;
+    }
+  }
+
   /** List this account's chats for the selection UI (requires ready). */
   async listChats(): Promise<WaChatInfo[]> {
     if (!this.client || this.status !== 'ready') return [];
@@ -718,6 +744,15 @@ export async function listAccountChats(id: string): Promise<WaChatInfo[]> {
   const a = get(id);
   if (!a) return [];
   return a.listChats();
+}
+
+/** On-demand media fetch for a WhatsApp message that has no stored file yet. */
+export async function downloadWaMedia(
+  accountId: string,
+  sid: string,
+): Promise<{ mime: string; path: string } | null> {
+  const a = get(accountId);
+  return a ? a.downloadMediaById(sid) : null;
 }
 
 export function accountIsReady(id: string): boolean {

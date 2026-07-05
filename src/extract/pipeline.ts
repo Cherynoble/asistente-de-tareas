@@ -15,9 +15,11 @@ export type ActivityEvent =
       waAccount: string | null;
       direction: 'incoming' | 'outgoing';
       body: string;
+      ts: number; // when the message was sent (unix ms)
       hasAttachment: boolean;
-      // Image/PDF attachments that have a stored file, so the UI can render a
-      // thumbnail/preview via /api/attachment (empty for text-only messages).
+      // Image/PDF attachments the UI can render via /api/attachment (empty for
+      // text-only messages). Includes pathless WhatsApp images, which the
+      // endpoint fetches on demand.
       attachments: { index: number; mime: string }[];
     }
   | {
@@ -88,14 +90,20 @@ function saveTasks(tasks: ProposedTask[]): void {
   })();
 }
 
-/** Image/PDF attachments with a real stored file — what the UI can preview. */
+/** Attachments the UI can preview via /api/attachment. */
 function renderableAttachments(r: Row): { index: number; mime: string }[] {
   const mimes = r.attachment_mimes ? r.attachment_mimes.split('||') : [];
   const paths = r.attachment_paths ? r.attachment_paths.split('||') : [];
   const out: { index: number; mime: string }[] = [];
   mimes.forEach((mime, index) => {
     const hasFile = !!(paths[index] && paths[index].trim());
-    if (hasFile && (mime.startsWith('image/') || mime === 'application/pdf')) out.push({ index, mime });
+    if (hasFile && (mime.startsWith('image/') || mime === 'application/pdf')) {
+      out.push({ index, mime });
+    } else if (!hasFile && r.source === 'whatsapp' && mime === 'image') {
+      // Pathless WhatsApp image (older message / pre-download capture): the
+      // endpoint fetches it on demand when the browser requests it.
+      out.push({ index, mime: 'image/*' });
+    }
   });
   return out;
 }
@@ -111,6 +119,7 @@ function messageEvent(r: Row): ActivityEvent {
     waAccount: r.waAccount,
     direction: r.direction,
     body: r.body,
+    ts: r.ts,
     hasAttachment: !!r.attachment_mimes,
     attachments: renderableAttachments(r),
   };

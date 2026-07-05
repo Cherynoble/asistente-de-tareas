@@ -25,6 +25,7 @@ import {
   backfillAccount,
   listAccountChats,
   accountIsReady,
+  downloadWaMedia,
 } from '../ingest/whatsapp/client.js';
 import { runTurn } from '../chat/index.js';
 import {
@@ -768,18 +769,37 @@ app.post('/api/reminders/nudge', (_req, res) => {
 });
 
 /** Serve an attachment by message id + index, converting HEIC/etc. to JPEG. */
-app.get('/api/attachment', (req, res) => {
+app.get('/api/attachment', async (req, res) => {
   const id = Number(req.query.id);
   const i = Number(req.query.i ?? 0);
   const row = db()
-    .prepare('SELECT attachment_paths, attachment_mimes FROM messages WHERE id = ?')
-    .get(id) as { attachment_paths: string; attachment_mimes: string } | undefined;
+    .prepare(
+      'SELECT attachment_paths, attachment_mimes, source, wa_account, source_msg_id FROM messages WHERE id = ?',
+    )
+    .get(id) as
+    | {
+        attachment_paths: string;
+        attachment_mimes: string;
+        source: string;
+        wa_account: string | null;
+        source_msg_id: string;
+      }
+    | undefined;
   if (!row) {
     res.status(404).end();
     return;
   }
-  const filePath = (row.attachment_paths || '').split('||')[i];
-  const mime = (row.attachment_mimes || '').split('||')[i];
+  let filePath = (row.attachment_paths || '').split('||')[i];
+  let mime = (row.attachment_mimes || '').split('||')[i];
+  // WhatsApp media captured before download existed (or whose download failed)
+  // has no file — fetch it on demand from the connected account, then serve.
+  if ((!filePath || !filePath.trim()) && row.source === 'whatsapp' && i === 0 && row.source_msg_id) {
+    const dl = await downloadWaMedia(row.wa_account || 'acc1', row.source_msg_id);
+    if (dl) {
+      filePath = dl.path;
+      mime = dl.mime;
+    }
+  }
   if (!filePath || !mime) {
     res.status(404).end();
     return;
@@ -834,7 +854,9 @@ app.get('/api/process/stream', async (req, res) => {
   res.flushHeaders?.();
 
   const vision = req.query.vision === '1';
-  const visionCap = Math.min(Math.max(Number(req.query.cap ?? 15), 0), 100);
+  // Default high so "Procesar" analyzes every new image/PDF (bounded per click by
+  // the unprocessed-message count); still clamped to keep one run's cost sane.
+  const visionCap = Math.min(Math.max(Number(req.query.cap ?? 1000), 0), 2000);
   const maxBatches = Math.min(Math.max(Number(req.query.maxBatches ?? 10), 1), 100);
   const sse = sseSender(req, res);
 

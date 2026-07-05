@@ -135,6 +135,8 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .mrow .who { color: var(--muted); font-size: 11px; display: flex; justify-content: space-between; }
 .mrow .clip { margin-top: 2px; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .mrow .paperclip { color: var(--accent); }
+.mrow .mmeta { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.mrow .mwhen { color: var(--muted); font-variant-numeric: tabular-nums; }
 .mrow .matts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .mrow .matt { max-height: 120px; max-width: 100%; border-radius: 7px; background: #eef1f5; object-fit: cover; }
 .mrow a.matt.pdf { display: inline-flex; align-items: center; padding: 10px 14px; background: #fdeaea; color: var(--red); border-radius: 7px; font-weight: 600; font-size: 12px; text-decoration: none; }
