@@ -158,6 +158,21 @@ button.small { font-size: 12px; padding: 4px 9px; }
 button.danger { color: var(--red); border-color: #f0c9c9; background: #fff; }
 .wa-chatpick { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
 
+/* Adjuntos gallery */
+.att-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+.att-card { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); display: flex; flex-direction: column; }
+.att-media { background: #eef1f5; display: flex; align-items: center; justify-content: center; height: 140px; overflow: hidden; }
+.att-media img.att-thumb, .att-media video.att-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
+.att-media audio { width: 100%; padding: 0 8px; }
+.att-icon { flex-direction: column; gap: 4px; color: var(--muted); font-size: 30px; text-decoration: none; }
+.att-icon span { font-size: 11px; font-weight: 600; letter-spacing: 0.03em; }
+.att-meta { padding: 7px 9px; font-size: 12px; overflow: hidden; }
+.att-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.att-sub { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.att-when { font-variant-numeric: tabular-nums; }
+.att-dl { position: absolute; top: 6px; right: 6px; background: rgba(255,255,255,0.92); border: 1px solid var(--line); border-radius: 6px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; text-decoration: none; color: var(--fg); font-size: 15px; }
+.att-dl:hover { background: #fff; }
+
 .vcard { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; box-shadow: var(--shadow); }
 .vcard img { width: 100%; max-height: 200px; object-fit: cover; border-radius: 7px; background: #eef1f5; }
 .vcard .pdfbadge { display: inline-block; padding: 16px; background: #fdeaea; color: var(--red); border-radius: 7px; font-weight: 600; }

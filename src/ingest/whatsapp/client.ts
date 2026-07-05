@@ -43,6 +43,29 @@ const MAX_SYNC_RECYCLES = Number(process.env.WA_MAX_SYNC_RECYCLES ?? 2);
 // any photo or product PDF; videos/audio are skipped by type anyway.
 const MAX_MEDIA_BYTES = Number(process.env.WA_MAX_MEDIA_BYTES ?? 16 * 1024 * 1024);
 const MEDIA_DL_TIMEOUT_MS = Number(process.env.WA_MEDIA_TIMEOUT_MS ?? 20_000);
+// On-demand fetch (user opened the attachment gallery) is more permissive than
+// ingest: any media type, bigger cap, longer wait — because it's explicit.
+const ONDEMAND_MAX_BYTES = Number(process.env.WA_ONDEMAND_MAX_BYTES ?? 64 * 1024 * 1024);
+const ONDEMAND_TIMEOUT_MS = Number(process.env.WA_ONDEMAND_TIMEOUT_MS ?? 60_000);
+
+/** Reasonable file extension for a mime type (for a tidy stored filename). */
+function extForMime(mime: string): string {
+  const map: Record<string, string> = {
+    'application/pdf': 'pdf',
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'video/mp4': 'mp4',
+    'video/quicktime': 'mov',
+    'video/3gpp': '3gp',
+    'audio/ogg': 'ogg',
+    'audio/mpeg': 'mp3',
+    'audio/mp4': 'm4a',
+    'audio/aac': 'aac',
+  };
+  return map[mime] || (mime.split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 8) || 'bin';
+}
 
 export interface WaState {
   id: string;
@@ -292,29 +315,32 @@ class WaAccount {
     VALUES (@source, @account, @sid, @chatId, @chatName, @sender, @senderName, @dir,
      @body, @ts, @now, @hasAtt, @mimes, @names, @paths)`;
 
-  /**
-   * Download an image/PDF attachment so it can be shown in the UI and analyzed
-   * by vision (a product photo/quote over WhatsApp becoming a task is the whole
-   * point of the app). This is still read-only — downloadMedia only fetches the
-   * media to the linked device, it never sends anything. Best-effort: on any
-   * failure we fall back to the plain "[attachment: …]" marker. Videos, audio,
-   * and stickers are skipped (not useful for extraction and often large).
-   */
-  private async saveMedia(msg: Message): Promise<{ mime: string; name: string; path: string } | null> {
+  // Downloading media is still read-only — downloadMedia only fetches to the
+  // linked device, it never sends. Best-effort: a failure just leaves the
+  // "[attachment: …]" marker. Ingest keeps only images/PDFs (for vision); the
+  // on-demand gallery path keeps any type.
+
+  /** Download + store a message's media to disk. `accept` gates which mimes we
+   *  keep; `maxBytes`/`timeoutMs` bound cost. Returns the stored file or null. */
+  private async storeMedia(
+    msg: Message,
+    accept: (mime: string) => boolean,
+    maxBytes: number,
+    timeoutMs: number,
+  ): Promise<{ mime: string; name: string; path: string } | null> {
     try {
-      if (msg.type !== 'image' && msg.type !== 'document') return null;
       const media = await Promise.race([
         msg.downloadMedia(),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), MEDIA_DL_TIMEOUT_MS)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
       ]);
       if (!media || !media.data) return null;
       const mime = media.mimetype || '';
-      if (!mime.startsWith('image/') && mime !== 'application/pdf') return null; // e.g. a .docx document
+      if (!accept(mime)) return null;
       const buf = Buffer.from(media.data, 'base64');
-      if (!buf.length || buf.length > MAX_MEDIA_BYTES) return null;
+      if (!buf.length || buf.length > maxBytes) return null;
       const dir = path.join(config.dataDir, 'wa_media', this.id);
       fs.mkdirSync(dir, { recursive: true });
-      const ext = mime === 'application/pdf' ? 'pdf' : (mime.split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '');
+      const ext = extForMime(mime);
       const base = msg.id._serialized.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 80);
       const filePath = path.join(dir, `${base}.${ext}`);
       fs.writeFileSync(filePath, buf);
@@ -322,6 +348,17 @@ class WaAccount {
     } catch {
       return null;
     }
+  }
+
+  /** Ingest-time: conservative — only images/PDFs, modest cap (bulk backfill). */
+  private async saveMedia(msg: Message): Promise<{ mime: string; name: string; path: string } | null> {
+    if (msg.type !== 'image' && msg.type !== 'document') return null;
+    return this.storeMedia(
+      msg,
+      (m) => m.startsWith('image/') || m === 'application/pdf',
+      MAX_MEDIA_BYTES,
+      MEDIA_DL_TIMEOUT_MS,
+    );
   }
 
   /** Normalize and persist one WhatsApp message. Returns 1 if newly inserted. */
@@ -605,7 +642,9 @@ class WaAccount {
     try {
       const msg = await this.client.getMessageById(sid);
       if (!msg || !msg.hasMedia) return null;
-      const saved = await this.saveMedia(msg);
+      // Permissive: the user explicitly opened this attachment, so fetch any
+      // type (video, audio, doc, sticker), with a larger cap and longer wait.
+      const saved = await this.storeMedia(msg, () => true, ONDEMAND_MAX_BYTES, ONDEMAND_TIMEOUT_MS);
       if (!saved) return null;
       db()
         .prepare(

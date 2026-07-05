@@ -90,6 +90,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
     if (id === 'trash') loadTrash();
     if (id === 'chat') initChat();
     if (id === 'clients') loadSenders();
+    if (id === 'attachments') loadAttachments(true);
     if (id === 'settings') {
       loadSettings();
       loadChats();
@@ -592,6 +593,102 @@ function renderSenders() {
 }
 $('#clients-search').addEventListener('input', renderSenders);
 $('#clients-bulk-delete').onclick = () => bulkClients(clientsSel, 'delete');
+
+// ---- Adjuntos (persistent attachment gallery) ----
+let attItems = [];
+let attOffset = 0;
+let attLoading = false;
+let attDone = false;
+const ATT_PAGE = 120;
+
+async function loadAttachments(reset) {
+  if (reset) {
+    attItems = [];
+    attOffset = 0;
+    attDone = false;
+    $('#att-grid').innerHTML = '';
+  }
+  if (attLoading || attDone) return;
+  attLoading = true;
+  $('#att-status').textContent = 'cargando…';
+  try {
+    const r = await (await fetch(`/api/attachments?limit=${ATT_PAGE}&offset=${attOffset}`)).json();
+    attItems.push(...(r.attachments || []));
+    attOffset += ATT_PAGE; // server paginates by message row; advance by the page size
+    attDone = !!r.done;
+  } catch {
+    attLoading = false;
+    $('#att-status').textContent = 'no se pudieron cargar';
+    return;
+  }
+  attLoading = false;
+  $('#att-status').textContent = '';
+  renderAttachments();
+}
+
+function attWho(a) {
+  return a.sender === 'me'
+    ? 'yo →'
+    : esc(displayName(a.sender) || a.senderName || prettySender(a.sender, a.senderName));
+}
+
+function attCard(a) {
+  const src = `/api/attachment?id=${a.id}&i=${a.i}`;
+  let media;
+  if (a.category === 'image') media = `<img class="att-thumb" loading="lazy" src="${src}" alt="" />`;
+  else if (a.category === 'video') media = `<video class="att-thumb" controls preload="metadata" src="${src}"></video>`;
+  else if (a.category === 'pdf')
+    media = `<a class="att-thumb att-icon" href="${src}" target="_blank" rel="noopener">📄<span>PDF</span></a>`;
+  else if (a.category === 'audio') media = `<audio controls preload="none" src="${src}"></audio>`;
+  else media = `<div class="att-thumb att-icon">📎<span>archivo</span></div>`;
+  const name = a.filename || a.category;
+  const card = el(`<div class="att-card">
+    <div class="att-media">${media}</div>
+    <div class="att-meta">
+      <div class="att-name" title="${esc(name)}">${esc(name)}</div>
+      <div class="att-sub">${sourceBadge(a.source)}${accountBadge(a.source, a.waAccount)} ${attWho(a)}</div>
+      ${a.chatName ? `<div class="att-sub att-where" title="${esc(a.chatName)}">${esc(a.chatName)}</div>` : ''}
+      <div class="att-sub att-when">${esc(fmtMsgTime(a.ts))}</div>
+    </div>
+    <a class="att-dl" href="${src}&download=1" title="Descargar una copia">⤓</a>
+  </div>`);
+  // Broken preview (e.g. WhatsApp media that can't be fetched on demand): show a
+  // placeholder but keep the metadata + download button.
+  const img = card.querySelector('img.att-thumb, video.att-thumb');
+  if (img)
+    img.addEventListener('error', () => {
+      const box = card.querySelector('.att-media');
+      if (box) box.innerHTML = '<div class="att-thumb att-icon">🚫<span>no disponible</span></div>';
+    });
+  return card;
+}
+
+function renderAttachments() {
+  const q = $('#att-search').value;
+  const typ = $('#att-type').value;
+  const grid = $('#att-grid');
+  grid.innerHTML = '';
+  const items = attItems.filter(
+    (a) =>
+      (!typ || a.category === typ) &&
+      matches(q, a.filename, displayName(a.sender), a.senderName, a.chatName, a.mime),
+  );
+  $('#att-count').textContent = items.length ? `${items.length} archivo(s)` : '';
+  if (!items.length) {
+    grid.append(
+      el(
+        `<div class="empty">${attItems.length ? 'Nada coincide con la búsqueda.' : 'No hay adjuntos en los chats incluidos todavía.'}</div>`,
+      ),
+    );
+  } else {
+    for (const a of items) grid.append(attCard(a));
+  }
+  $('#att-more').hidden = attDone;
+}
+
+$('#att-search').addEventListener('input', renderAttachments);
+$('#att-type').addEventListener('change', renderAttachments);
+$('#att-more').addEventListener('click', () => loadAttachments(false));
 
 // ---- Trash ----
 let trashData = { tasks: [], clients: [] };

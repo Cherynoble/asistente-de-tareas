@@ -18,6 +18,7 @@
       <button class="tab" data-tab="archive">Archivo</button>
       <button class="tab" data-tab="trash">Papelera <span id="trash-pill" class="pill">0</span></button>
       <button class="tab" data-tab="clients">Clientes</button>
+      <button class="tab" data-tab="attachments">Adjuntos</button>
       <button class="tab" data-tab="chat">Chat</button>
       <button class="tab" data-tab="pipeline">Proceso</button>
       <button class="tab" data-tab="settings">Ajustes</button>
@@ -112,6 +113,28 @@
           </span>
         </div>
         <div id="senders-list" class="cards"></div>
+      </section>
+
+      <!-- ADJUNTOS -->
+      <section id="attachments" class="panel">
+        <p class="hint">Todas las imágenes, PDF, videos y archivos recibidos y enviados en los chats incluidos. Busca por nombre de archivo, contacto o chat; descarga una copia con el botón ⤓.</p>
+        <div class="toolbar">
+          <input class="search" id="att-search" placeholder="Buscar por archivo, contacto o chat…" />
+          <select id="att-type">
+            <option value="">Todos los tipos</option>
+            <option value="image">Imágenes</option>
+            <option value="pdf">PDF</option>
+            <option value="video">Videos</option>
+            <option value="audio">Audio</option>
+            <option value="other">Otros archivos</option>
+          </select>
+          <span id="att-count" class="selcount"></span>
+        </div>
+        <div id="att-grid" class="att-grid"></div>
+        <div class="setrow" style="justify-content:center">
+          <button id="att-more" hidden>Cargar más</button>
+          <span id="att-status" class="run-status"></span>
+        </div>
       </section>
 
       <!-- CHAT -->

@@ -774,12 +774,13 @@ app.get('/api/attachment', async (req, res) => {
   const i = Number(req.query.i ?? 0);
   const row = db()
     .prepare(
-      'SELECT attachment_paths, attachment_mimes, source, wa_account, source_msg_id FROM messages WHERE id = ?',
+      'SELECT attachment_paths, attachment_mimes, attachment_names, source, wa_account, source_msg_id FROM messages WHERE id = ?',
     )
     .get(id) as
     | {
         attachment_paths: string;
         attachment_mimes: string;
+        attachment_names: string;
         source: string;
         wa_account: string | null;
         source_msg_id: string;
@@ -809,22 +810,135 @@ app.get('/api/attachment', async (req, res) => {
     res.status(404).end();
     return;
   }
+  // Download-a-copy: any file type, forced as an attachment with a tidy name.
+  if (req.query.download === '1') {
+    const rawName = (row.attachment_names || '').split('||')[i] || '';
+    const name = (rawName || `${row.source}-${id}-${i}${path.extname(abs)}`)
+      .replace(/[^\w.\- ]/g, '_')
+      .slice(0, 120);
+    res.download(abs, name);
+    return;
+  }
   if (NATIVE_IMAGE.has(mime) || mime === 'application/pdf') {
     res.type(mime);
     fs.createReadStream(abs).pipe(res);
     return;
   }
-  // Convert (HEIC, TIFF, …) to JPEG for the browser.
-  try {
-    const tmp = path.join(os.tmpdir(), `dash-${id}-${i}-${Date.now()}.jpg`);
-    execFileSync('/usr/bin/sips', ['-s', 'format', 'jpeg', abs, '--out', tmp], { stdio: 'ignore' });
-    res.type('image/jpeg');
-    const stream = fs.createReadStream(tmp);
-    stream.pipe(res);
-    stream.on('close', () => fs.unlink(tmp, () => {}));
-  } catch {
-    res.status(415).end();
+  // Video/audio: sendFile handles Content-Type + Range (seeking / playback).
+  if (mime.startsWith('video/') || mime.startsWith('audio/')) {
+    res.sendFile(abs, (err) => {
+      if (err && !res.headersSent) res.status(404).end();
+    });
+    return;
   }
+  // Other images (HEIC, TIFF, …): convert to JPEG for the browser.
+  if (mime.startsWith('image/')) {
+    try {
+      const tmp = path.join(os.tmpdir(), `dash-${id}-${i}-${Date.now()}.jpg`);
+      execFileSync('/usr/bin/sips', ['-s', 'format', 'jpeg', abs, '--out', tmp], { stdio: 'ignore' });
+      res.type('image/jpeg');
+      const stream = fs.createReadStream(tmp);
+      stream.pipe(res);
+      stream.on('close', () => fs.unlink(tmp, () => {}));
+    } catch {
+      res.status(415).end();
+    }
+    return;
+  }
+  // Non-previewable file (doc, vcf, …): the gallery offers it via ?download=1.
+  res.status(415).end();
+});
+
+/** Which chat_ids are "included" given the per-source selections (empty = all).
+ *  Shared logic with the Clientes tab so the gallery honors the same scope. */
+function includedChats(): { filtering: boolean; allowed: string[] } {
+  const selImsg = getSelectedChats();
+  const waSel = new Map(listWaAccounts().map((a) => [a.id, getSelectedWaChats(a.id)]));
+  const anyWaFilter = [...waSel.values()].some((s) => s.length > 0);
+  const filtering = selImsg.length > 0 || anyWaFilter;
+  if (!filtering) return { filtering: false, allowed: [] };
+  const rows = db()
+    .prepare(`SELECT DISTINCT source, wa_account, chat_id FROM messages WHERE chat_id IS NOT NULL`)
+    .all() as { source: string; wa_account: string | null; chat_id: string }[];
+  const allowed: string[] = [];
+  for (const r of rows) {
+    if (r.source === 'whatsapp') {
+      const sel = waSel.get(r.wa_account || 'acc1') ?? getSelectedWaChats(r.wa_account || 'acc1');
+      if (!sel.length || sel.includes(r.chat_id)) allowed.push(r.chat_id);
+    } else {
+      const ident = String(r.chat_id).split(';').pop() ?? r.chat_id;
+      if (!selImsg.length || selImsg.includes(ident)) allowed.push(r.chat_id);
+    }
+  }
+  return { filtering: true, allowed };
+}
+
+function attachmentCategory(mime: string): 'image' | 'pdf' | 'video' | 'audio' | 'other' {
+  if (!mime) return 'other';
+  if (mime.startsWith('image/') || mime === 'image' || mime === 'sticker') return 'image';
+  if (mime === 'application/pdf') return 'pdf';
+  if (mime.startsWith('video/') || mime === 'video') return 'video';
+  if (mime.startsWith('audio/') || mime === 'audio' || mime === 'ptt') return 'audio';
+  return 'other';
+}
+
+/** Persistent attachment gallery: one entry per attachment on messages that have
+ *  them, newest first, respecting the included-chats selection, paginated. */
+app.get('/api/attachments', (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 120), 1), 500);
+  const offset = Math.max(Number(req.query.offset ?? 0), 0);
+  const { filtering, allowed } = includedChats();
+  if (filtering && allowed.length === 0) {
+    res.json({ attachments: [], done: true });
+    return;
+  }
+  const where = filtering ? `AND chat_id IN (${allowed.map(() => '?').join(',')})` : '';
+  const rows = db()
+    .prepare(
+      `SELECT id, source, wa_account, sender, sender_name, chat_name, ts,
+              attachment_mimes, attachment_names, attachment_paths
+       FROM messages WHERE has_attachment = 1 ${where}
+       ORDER BY ts DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...(filtering ? allowed : []), limit, offset) as {
+    id: number;
+    source: string;
+    wa_account: string | null;
+    sender: string | null;
+    sender_name: string | null;
+    chat_name: string | null;
+    ts: number;
+    attachment_mimes: string;
+    attachment_names: string;
+    attachment_paths: string;
+  }[];
+
+  const names = nameMap();
+  const out: unknown[] = [];
+  for (const r of rows) {
+    const mimes = (r.attachment_mimes || '').split('||');
+    const fnames = (r.attachment_names || '').split('||');
+    const paths = (r.attachment_paths || '').split('||');
+    for (let i = 0; i < Math.max(mimes.length, 1); i++) {
+      const mime = mimes[i] || '';
+      const p = paths[i];
+      out.push({
+        id: r.id,
+        i,
+        mime,
+        category: attachmentCategory(mime),
+        filename: fnames[i] || '',
+        ts: r.ts,
+        source: r.source,
+        waAccount: r.wa_account,
+        sender: r.sender,
+        senderName: r.sender === 'me' ? null : names[r.sender ?? ''] || r.sender_name || null,
+        chatName: r.chat_name,
+        hasFile: !!(p && p.trim()),
+      });
+    }
+  }
+  res.json({ attachments: out, done: rows.length < limit });
 });
 
 /** One-time backfill: import the most recent N iMessages. */
