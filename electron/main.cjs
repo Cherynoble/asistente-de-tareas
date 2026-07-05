@@ -193,6 +193,17 @@ function createWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+  // Safety net: the UI is a single page. Never let a link navigate the whole
+  // window to an /api/ endpoint (e.g. a file/download URL) — that white-screens
+  // the app. Downloads are handled in the renderer (blob save); this just blocks
+  // any anchor we might have missed. A same-page reload (root) is still allowed.
+  win.webContents.on('will-navigate', (e, url) => {
+    try {
+      if (new URL(url).pathname.startsWith('/api/')) e.preventDefault();
+    } catch {
+      /* ignore malformed */
+    }
+  });
 }
 
 // Only ONE copy may run: a second WhatsApp session on the same number competes

@@ -675,6 +675,28 @@ async function loadAttachments(reset) {
   renderAttachments();
 }
 
+// Save a file WITHOUT navigating the window. A plain <a href> to the attachment
+// URL makes the Electron top-level frame navigate to the file and white-screen
+// (the shell has no will-navigate guard). Fetch the bytes as a blob and save via
+// a temporary object-URL download instead — same-origin, never navigates.
+async function downloadFile(url, filename) {
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = filename || 'archivo';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 5000);
+  } catch {
+    alert('No se pudo descargar el archivo.');
+  }
+}
+
 function attWho(a) {
   return a.sender === 'me'
     ? 'yo →'
@@ -709,6 +731,13 @@ function attCard(a) {
       const box = card.querySelector('.att-media');
       if (box) box.innerHTML = '<div class="att-thumb att-icon">🚫<span>no disponible</span></div>';
     });
+  // Download without navigating the window (would white-screen in Electron).
+  const dl = card.querySelector('.att-dl');
+  if (dl)
+    dl.onclick = (e) => {
+      e.preventDefault();
+      downloadFile(`${src}&download=1`, name);
+    };
   return card;
 }
 
