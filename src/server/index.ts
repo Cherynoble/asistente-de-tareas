@@ -7,7 +7,7 @@ import express from 'express';
 import { db } from '../db/index.js';
 import { config } from '../config.js';
 import cron from 'node-cron';
-import { runExtraction, processNewMessages, type ActivityEvent } from '../extract/pipeline.js';
+import { processNewMessages, type ActivityEvent } from '../extract/pipeline.js';
 import { ingestRecentDays, backfillByCount } from '../ingest/imessage/ingest.js';
 import { listChats } from '../ingest/imessage/reader.js';
 import {
@@ -804,32 +804,6 @@ app.get('/api/attachment', (req, res) => {
     stream.on('close', () => fs.unlink(tmp, () => {}));
   } catch {
     res.status(415).end();
-  }
-});
-
-/** Live extraction over SSE — streams every message sifted and image analyzed. */
-app.get('/api/extract/stream', async (req, res) => {
-  if (!getApiKey()) {
-    res.status(400).json({ error: 'No ANTHROPIC_API_KEY set in .env' });
-    return;
-  }
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders?.();
-
-  const limit = Number(req.query.limit ?? 60);
-  const vision = req.query.vision === '1';
-  // Clamp the per-run vision cap to a sane range to bound cost.
-  const visionCap = Math.min(Math.max(Number(req.query.cap ?? 10), 1), 50);
-  const sse = sseSender(req, res);
-
-  try {
-    await runExtraction({ limit, vision, visionCap, onEvent: sse.send });
-  } catch (err) {
-    sse.fail(err instanceof Error ? err.message : String(err));
-  } finally {
-    if (!res.writableEnded) res.end();
   }
 });
 

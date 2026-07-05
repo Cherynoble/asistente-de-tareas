@@ -39,6 +39,10 @@ const MAX_ATTEMPTS = Number(process.env.WA_MAX_ATTEMPTS ?? 2);
 // pathological account can't loop forever; after that we ask the user to re-pair.
 const SYNC_STALL_MS = Number(process.env.WA_SYNC_STALL_MS ?? 5 * 60_000);
 const MAX_SYNC_RECYCLES = Number(process.env.WA_MAX_SYNC_RECYCLES ?? 2);
+// Cap how big an attachment we download+store (skip huge files). 16 MB covers
+// any photo or product PDF; videos/audio are skipped by type anyway.
+const MAX_MEDIA_BYTES = Number(process.env.WA_MAX_MEDIA_BYTES ?? 16 * 1024 * 1024);
+const MEDIA_DL_TIMEOUT_MS = Number(process.env.WA_MEDIA_TIMEOUT_MS ?? 20_000);
 
 export interface WaState {
   id: string;
@@ -286,7 +290,39 @@ class WaAccount {
     (source, wa_account, source_msg_id, chat_id, chat_name, sender, sender_name, direction,
      body, ts, ingested_at, has_attachment, attachment_mimes, attachment_names, attachment_paths)
     VALUES (@source, @account, @sid, @chatId, @chatName, @sender, @senderName, @dir,
-     @body, @ts, @now, @hasAtt, @mimes, '', '')`;
+     @body, @ts, @now, @hasAtt, @mimes, @names, @paths)`;
+
+  /**
+   * Download an image/PDF attachment so it can be shown in the UI and analyzed
+   * by vision (a product photo/quote over WhatsApp becoming a task is the whole
+   * point of the app). This is still read-only — downloadMedia only fetches the
+   * media to the linked device, it never sends anything. Best-effort: on any
+   * failure we fall back to the plain "[attachment: …]" marker. Videos, audio,
+   * and stickers are skipped (not useful for extraction and often large).
+   */
+  private async saveMedia(msg: Message): Promise<{ mime: string; name: string; path: string } | null> {
+    try {
+      if (msg.type !== 'image' && msg.type !== 'document') return null;
+      const media = await Promise.race([
+        msg.downloadMedia(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), MEDIA_DL_TIMEOUT_MS)),
+      ]);
+      if (!media || !media.data) return null;
+      const mime = media.mimetype || '';
+      if (!mime.startsWith('image/') && mime !== 'application/pdf') return null; // e.g. a .docx document
+      const buf = Buffer.from(media.data, 'base64');
+      if (!buf.length || buf.length > MAX_MEDIA_BYTES) return null;
+      const dir = path.join(config.dataDir, 'wa_media', this.id);
+      fs.mkdirSync(dir, { recursive: true });
+      const ext = mime === 'application/pdf' ? 'pdf' : (mime.split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '');
+      const base = msg.id._serialized.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 80);
+      const filePath = path.join(dir, `${base}.${ext}`);
+      fs.writeFileSync(filePath, buf);
+      return { mime, name: media.filename || `${msg.type}.${ext}`, path: filePath };
+    } catch {
+      return null;
+    }
+  }
 
   /** Normalize and persist one WhatsApp message. Returns 1 if newly inserted. */
   private async persist(msg: Message): Promise<number> {
@@ -298,6 +334,45 @@ class WaAccount {
       let body = msg.body || '';
       if (!body && hasMedia) body = `[attachment: ${msg.type}]`;
       if (!body) return 0;
+
+      // Already stored? (UNIQUE(source, source_msg_id)) Then don't re-download —
+      // but if it was captured before media download existed and still has no
+      // file, backfill the attachment now, so re-importing history fills media
+      // onto old rows. Either way it's not a new insert.
+      const sid = msg.id._serialized;
+      const existing = db()
+        .prepare(
+          `SELECT id, attachment_paths AS paths FROM messages WHERE source='whatsapp' AND source_msg_id = ?`,
+        )
+        .get(sid) as { id: number; paths: string | null } | undefined;
+      if (existing) {
+        if (hasMedia && !(existing.paths && existing.paths.trim())) {
+          const saved = await this.saveMedia(msg);
+          if (saved) {
+            db()
+              .prepare(
+                `UPDATE messages SET attachment_mimes=?, attachment_names=?, attachment_paths=? WHERE id=?`,
+              )
+              .run(saved.mime, saved.name, saved.path, existing.id);
+          }
+        }
+        return 0;
+      }
+
+      // New message → download image/PDF media so it can be shown + vision-
+      // analyzed. Falls back to a bare type marker (mime = msg.type, no path)
+      // when download isn't possible, so capture never depends on it.
+      let mimes = hasMedia ? msg.type : '';
+      let names = '';
+      let paths = '';
+      if (hasMedia) {
+        const saved = await this.saveMedia(msg);
+        if (saved) {
+          mimes = saved.mime;
+          names = saved.name;
+          paths = saved.path;
+        }
+      }
 
       const fromMe = msg.fromMe;
       const sender = fromMe ? 'me' : msg.author || msg.from || null;
@@ -333,7 +408,9 @@ class WaAccount {
           ts: (msg.timestamp || 0) * 1000,
           now: Date.now(),
           hasAtt: hasMedia ? 1 : 0,
-          mimes: hasMedia ? msg.type : '',
+          mimes,
+          names,
+          paths,
         });
       return info.changes;
     } catch {

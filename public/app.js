@@ -434,9 +434,21 @@ function handleEvent(e) {
     counters.msgs++;
     $('#msg-count').textContent = counters.msgs;
     const who = e.direction === 'outgoing' ? 'yo →' : esc(prettySender(e.sender, e.senderName));
+    // Inline thumbnails / PDF chips for any image or PDF attachment we have a file for.
+    const atts = (e.attachments || [])
+      .map((a) =>
+        a.mime === 'application/pdf'
+          ? `<a class="matt pdf" href="/api/attachment?id=${e.id}&i=${a.index}" target="_blank" rel="noopener">📄 PDF</a>`
+          : `<img class="matt" loading="lazy" src="/api/attachment?id=${e.id}&i=${a.index}" alt="" />`,
+      )
+      .join('');
+    // If the body is only the "[attachment: …]" placeholder and we're showing the
+    // real attachment, drop the redundant placeholder text.
+    const isMarker = /^\[attachment: .*\]$/.test(e.body || '');
+    const clip = atts && isMarker ? '' : `<div class="clip">${esc(e.body)}</div>`;
     $('#msg-feed').append(el(`<div class="mrow ${e.direction === 'outgoing' ? 'out' : ''}">
       <div class="who"><span>${sourceBadge(e.source)}${accountBadge(e.source, e.waAccount)} ${who}</span>${e.hasAttachment ? '<span class="paperclip">📎</span>' : ''}</div>
-      <div class="clip">${esc(e.body)}</div></div>`));
+      ${clip}${atts ? `<div class="matts">${atts}</div>` : ''}</div>`));
   } else if (e.type === 'vision') {
     counters.vis++;
     $('#vis-count').textContent = counters.vis;
@@ -487,16 +499,6 @@ function startStream(url, statusEl, onDone) {
   es.onerror = () => finish('se interrumpió la conexión — vuelve a intentarlo');
   return es;
 }
-
-$('#run').addEventListener('click', () => {
-  const limit = Number($('#limit').value) || 40;
-  const vision = $('#vision').checked ? 1 : 0;
-  const cap = Number($('#visionCap').value) || 10;
-  startStream(`/api/extract/stream?limit=${limit}&vision=${vision}&cap=${cap}`, $('#run-status'), () => {
-    loadInbox();
-    loadStats();
-  });
-});
 
 $('#process').addEventListener('click', () => {
   startStream(`/api/process/stream?vision=1&cap=15`, $('#proc-status'), () => {

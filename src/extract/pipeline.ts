@@ -16,6 +16,9 @@ export type ActivityEvent =
       direction: 'incoming' | 'outgoing';
       body: string;
       hasAttachment: boolean;
+      // Image/PDF attachments that have a stored file, so the UI can render a
+      // thumbnail/preview via /api/attachment (empty for text-only messages).
+      attachments: { index: number; mime: string }[];
     }
   | {
       type: 'vision';
@@ -85,6 +88,34 @@ function saveTasks(tasks: ProposedTask[]): void {
   })();
 }
 
+/** Image/PDF attachments with a real stored file — what the UI can preview. */
+function renderableAttachments(r: Row): { index: number; mime: string }[] {
+  const mimes = r.attachment_mimes ? r.attachment_mimes.split('||') : [];
+  const paths = r.attachment_paths ? r.attachment_paths.split('||') : [];
+  const out: { index: number; mime: string }[] = [];
+  mimes.forEach((mime, index) => {
+    const hasFile = !!(paths[index] && paths[index].trim());
+    if (hasFile && (mime.startsWith('image/') || mime === 'application/pdf')) out.push({ index, mime });
+  });
+  return out;
+}
+
+/** The 'message' activity event for one row (shared by preview + process). */
+function messageEvent(r: Row): ActivityEvent {
+  return {
+    type: 'message',
+    id: r.id,
+    sender: r.sender,
+    senderName: r.senderName,
+    source: r.source,
+    waAccount: r.waAccount,
+    direction: r.direction,
+    body: r.body,
+    hasAttachment: !!r.attachment_mimes,
+    attachments: renderableAttachments(r),
+  };
+}
+
 function toMessages(rows: Row[]): IngestedMessage[] {
   return rows.map((r) => ({
     id: r.id,
@@ -149,19 +180,7 @@ export async function runExtraction(opts: ExtractionOptions = {}): Promise<{ pro
   ).reverse();
 
   emit({ type: 'start', total: rows.length, vision });
-  for (const r of rows) {
-    emit({
-      type: 'message',
-      id: r.id,
-      sender: r.sender,
-      senderName: r.senderName,
-      source: r.source,
-      waAccount: r.waAccount,
-      direction: r.direction,
-      body: r.body,
-      hasAttachment: !!r.attachment_mimes,
-    });
-  }
+  for (const r of rows) emit(messageEvent(r));
 
   if (vision) await enrichVision(rows, cap, emit);
 
@@ -240,19 +259,7 @@ export async function processNewMessages(opts: ProcessOptions = {}): Promise<{
       if (rows.length === 0) break;
 
       // Stream each message so the Pipeline tab's "Messages sifted" fills live.
-      for (const r of rows) {
-        emit({
-          type: 'message',
-          id: r.id,
-          sender: r.sender,
-          senderName: r.senderName,
-          source: r.source,
-          waAccount: r.waAccount,
-          direction: r.direction,
-          body: r.body,
-          hasAttachment: !!r.attachment_mimes,
-        });
-      }
+      for (const r of rows) emit(messageEvent(r));
 
       if (vision && visionBudget > 0) {
         visionBudget -= await enrichVision(rows, visionBudget, emit);
