@@ -367,6 +367,10 @@ class WaAccount {
       const selected = getSelectedWaChats(this.id);
       if (selected.length && msg.id.remote && !selected.includes(msg.id.remote)) return 0;
 
+      // Stickers are pure noise for a task tracker (memes/emoji, no product
+      // signal) and just eat storage + on-demand downloads. Drop them entirely.
+      if (msg.type === 'sticker') return 0;
+
       const hasMedia = msg.hasMedia;
       let body = msg.body || '';
       if (!body && hasMedia) body = `[attachment: ${msg.type}]`;
@@ -642,8 +646,9 @@ class WaAccount {
     try {
       const msg = await this.client.getMessageById(sid);
       if (!msg || !msg.hasMedia) return null;
+      if (msg.type === 'sticker') return null; // never spend time/storage on stickers
       // Permissive: the user explicitly opened this attachment, so fetch any
-      // type (video, audio, doc, sticker), with a larger cap and longer wait.
+      // type (video, audio, doc), with a larger cap and longer wait.
       const saved = await this.storeMedia(msg, () => true, ONDEMAND_MAX_BYTES, ONDEMAND_TIMEOUT_MS);
       if (!saved) return null;
       db()

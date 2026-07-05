@@ -69,16 +69,24 @@ function loadImage(filePath: string, mime: string): { data: string; mediaType: s
 /**
  * Describe an image or PDF attachment and surface any implied task. Never
  * throws — a problem with one attachment returns a short note so the batch
- * keeps going.
+ * keeps going. `opts.prompt`/`opts.maxTokens` override the terse extraction
+ * defaults — the chat "read this file" tool passes a fuller prompt so the
+ * assistant can actually quote figures/details, not just a one-line summary.
  */
-export async function describeAttachment(filePath: string, mime: string): Promise<string> {
+export async function describeAttachment(
+  filePath: string,
+  mime: string,
+  opts: { prompt?: string; maxTokens?: number } = {},
+): Promise<string> {
+  const prompt = opts.prompt ?? PROMPT;
+  const maxTokens = opts.maxTokens ?? 300;
   try {
     if (mime === 'application/pdf') {
       const abs = expandHome(filePath);
       if (!fs.existsSync(abs)) return '(file not found)';
       const resp = await anthropicClient().messages.create({
         model: config.model,
-        max_tokens: 300,
+        max_tokens: maxTokens,
         messages: [
           {
             role: 'user',
@@ -87,7 +95,7 @@ export async function describeAttachment(filePath: string, mime: string): Promis
                 type: 'document',
                 source: { type: 'base64', media_type: 'application/pdf', data: fs.readFileSync(abs).toString('base64') },
               },
-              { type: 'text', text: PROMPT },
+              { type: 'text', text: prompt },
             ],
           },
         ],
@@ -100,13 +108,13 @@ export async function describeAttachment(filePath: string, mime: string): Promis
       if (!img) return '(could not load/convert image)';
       const resp = await anthropicClient().messages.create({
         model: config.model,
-        max_tokens: 300,
+        max_tokens: maxTokens,
         messages: [
           {
             role: 'user',
             content: [
               { type: 'image', source: { type: 'base64', media_type: img.mediaType as 'image/jpeg', data: img.data } },
-              { type: 'text', text: PROMPT },
+              { type: 'text', text: prompt },
             ],
           },
         ],

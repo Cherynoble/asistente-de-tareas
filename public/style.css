@@ -101,6 +101,19 @@ button:not(.tab) {
 }
 button:not(.tab):hover { filter: brightness(0.97); }
 button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* Native dropdowns: same pill look as buttons, with a custom chevron so they
+   match the rest of the UI instead of the raw macOS control. */
+select {
+  appearance: none; -webkit-appearance: none;
+  border: 1px solid #d7dde6; background-color: #eef1f6; color: var(--ink);
+  padding: 6px 30px 6px 12px; border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 550;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='10'%20height='6'%20viewBox='0%200%2010%206'%3E%3Cpath%20d='M1%201l4%204%204-4'%20fill='none'%20stroke='%236b7686'%20stroke-width='1.5'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 11px center;
+}
+select:hover { filter: brightness(0.97); }
+select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(47, 109, 246, 0.15); }
+.toolbar .bulk select { padding: 5px 26px 5px 9px; }
 button.primary:disabled { opacity: 0.5; cursor: default; }
 .actions button { background: #fff; }
 .actions .approve { color: var(--green); border-color: #bfe6cf; }
@@ -186,6 +199,33 @@ button.danger { color: var(--red); border-color: #f0c9c9; background: #fff; }
 
 .quote { margin-top: 8px; font-size: 13px; color: #5a4a2a; background: #fcf6e8; border: 1px solid #f0e3c4; border-radius: 6px; padding: 6px 9px; }
 .quote span { font-family: ui-monospace, Menlo, monospace; color: #3a2f15; }
+
+/* Task → file deep link */
+.filelink { margin-top: 8px; }
+.filelink a { font-size: 13px; color: var(--accent, #2563eb); text-decoration: none; font-weight: 600; }
+.filelink a:hover { text-decoration: underline; }
+
+/* Focused file(s) pinned at the top of Adjuntos when arriving from a task */
+.att-focus { margin-bottom: 18px; padding: 12px; border: 1px solid var(--accent, #2563eb); border-radius: 12px; background: rgba(37,99,235,0.05); }
+.att-focus-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-weight: 700; color: var(--fg); }
+.att-focus-clear { font-size: 12px; padding: 4px 10px; }
+
+/* Collapsible help inside Proceso */
+.help-inline { margin: 0 0 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; }
+.help-inline > summary { cursor: pointer; padding: 12px 14px; font-weight: 600; list-style: none; }
+.help-inline > summary::-webkit-details-marker { display: none; }
+.help-inline > summary::before { content: '▸ '; color: var(--muted); }
+.help-inline[open] > summary::before { content: '▾ '; }
+.help-inline .help-body { padding: 4px 16px 14px; color: var(--fg); }
+.help-inline .help-body p { margin: 8px 0; line-height: 1.5; font-size: 14px; }
+
+/* Full Ayuda guide */
+.help-doc { max-width: 760px; line-height: 1.6; }
+.help-doc h2 { font-size: 17px; margin: 26px 0 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+.help-doc h2:first-child { border-top: none; margin-top: 6px; }
+.help-doc p { margin: 8px 0; }
+.help-doc ul, .help-doc ol { margin: 8px 0; padding-left: 22px; }
+.help-doc li { margin: 5px 0; }
 
 .newtask { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
 .newtask input { padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 14px; }

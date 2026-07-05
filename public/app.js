@@ -90,7 +90,12 @@ document.querySelectorAll('.tab').forEach((btn) => {
     if (id === 'trash') loadTrash();
     if (id === 'chat') initChat();
     if (id === 'clients') loadSenders();
-    if (id === 'attachments') loadAttachments(true);
+    if (id === 'attachments') {
+      attFocusId = null;
+      const fb = $('#att-focus');
+      if (fb) { fb.hidden = true; fb.innerHTML = ''; }
+      loadAttachments(true);
+    }
     if (id === 'settings') {
       loadSettings();
       loadChats();
@@ -242,6 +247,7 @@ function renderInbox() {
         <div class="detail">${esc(t.detail)}</div>
         ${t.sourceQuote ? `<div class="quote">🔎 buscar ${who ? 'a ' + esc(who) : ''}: <span>"${esc(t.sourceQuote)}"</span></div>` : ''}
         ${t.sourceBody && !t.sourceQuote ? `<div class="src">${t.hasAttachment ? '📎 ' : ''}${esc(t.sourceBody.slice(0, 160))}</div>` : ''}
+        ${t.hasAttachment && t.sourceMessageId ? `<div class="filelink"><a href="#" class="j-file">📎 ver archivo</a></div>` : ''}
         <div class="meta">${who ? `<span>cliente: ${esc(who)}</span>` : ''}${t.createdAt ? `<span>generada: ${esc(fmtGen(t.createdAt))}</span>` : ''}${accountBadge(t.source, t.waAccount)}</div>
         <div class="actions">
           <button class="approve j-approve">✓ Aprobar</button>
@@ -252,6 +258,8 @@ function renderInbox() {
     inboxSel.bind(card.querySelector('.sel'), String(t.id));
     card.querySelector('.j-approve').onclick = () => setStatus(t.id, 'todo');
     card.querySelector('.j-del').onclick = () => deleteTask(t.id);
+    const fileLink = card.querySelector('.j-file');
+    if (fileLink) fileLink.onclick = (e) => { e.preventDefault(); focusAttachment(t.sourceMessageId); };
     list.append(card);
   }
   inboxSel.refresh();
@@ -329,6 +337,7 @@ function renderTasks() {
         <div class="title">${esc(t.title)}</div>
         <div class="detail">${esc(t.detail)}</div>
         ${t.sourceQuote ? `<div class="quote">🔎 "${esc(t.sourceQuote)}"</div>` : ''}
+        ${t.hasAttachment && t.sourceMessageId ? `<div class="filelink"><a href="#" class="j-file">📎 ver archivo</a></div>` : ''}
         <div class="meta">
           ${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}${accountBadge(t.source, t.waAccount)}
           <label class="due ${overdue ? 'overdue' : ''}">vence <input type="date" class="duedate" value="${dateInput(t.dueAt)}" /></label>
@@ -341,6 +350,8 @@ function renderTasks() {
       </div>
     </div>`);
     tasksSel.bind(card.querySelector('.sel'), String(t.id));
+    const fileLink = card.querySelector('.j-file');
+    if (fileLink) fileLink.onclick = (e) => { e.preventDefault(); focusAttachment(t.sourceMessageId); };
     card.querySelector('.status').onchange = (e) => setStatus(t.id, e.target.value);
     card.querySelector('.duedate').onchange = (e) => setDue(t.id, e.target.value);
     card.querySelector('.archivebtn').onclick = () => archiveTask(t.id);
@@ -599,7 +610,45 @@ let attItems = [];
 let attOffset = 0;
 let attLoading = false;
 let attDone = false;
+let attFocusId = null; // message whose file a task deep-link is highlighting
 const ATT_PAGE = 120;
+
+// Jump from a task card straight to its source file in the gallery.
+async function focusAttachment(messageId) {
+  document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'attachments'));
+  document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('active', p.id === 'attachments'));
+  attFocusId = Number(messageId);
+  await loadAttachments(true);
+  await renderFocus();
+}
+
+async function renderFocus() {
+  const box = $('#att-focus');
+  if (!box) return;
+  box.innerHTML = '';
+  box.hidden = true;
+  if (!attFocusId) return;
+  try {
+    const r = await (await fetch(`/api/attachments/locate?messageId=${attFocusId}`)).json();
+    const items = r.attachments || [];
+    if (!items.length) return;
+    box.hidden = false;
+    const head = el(
+      `<div class="att-focus-head"><span>📎 Archivo de la tarea</span><button class="att-focus-clear">quitar</button></div>`,
+    );
+    head.querySelector('.att-focus-clear').onclick = () => {
+      attFocusId = null;
+      renderFocus();
+    };
+    box.append(head);
+    const grid = el('<div class="att-grid"></div>');
+    for (const a of items) grid.append(attCard(a));
+    box.append(grid);
+    box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch {
+    /* focus is best-effort */
+  }
+}
 
 async function loadAttachments(reset) {
   if (reset) {

@@ -21,6 +21,7 @@
       <button class="tab" data-tab="attachments">Adjuntos</button>
       <button class="tab" data-tab="chat">Chat</button>
       <button class="tab" data-tab="pipeline">Proceso</button>
+      <button class="tab" data-tab="help">Ayuda</button>
       <button class="tab" data-tab="settings">Ajustes</button>
     </nav>
 
@@ -130,6 +131,7 @@
           </select>
           <span id="att-count" class="selcount"></span>
         </div>
+        <div id="att-focus" class="att-focus" hidden></div>
         <div id="att-grid" class="att-grid"></div>
         <div class="setrow" style="justify-content:center">
           <button id="att-more" hidden>Cargar más</button>
@@ -180,6 +182,15 @@
       <section id="pipeline" class="panel">
         <p class="hint">Mira el motor en acción: cada mensaje que lee, cada imagen/PDF que analiza y las tareas que propone.</p>
 
+        <details class="help-inline">
+          <summary>¿Cómo funcionan “Importar historial” y “Procesar mensajes nuevos”?</summary>
+          <div class="help-body">
+            <p><b>1. Importar historial</b> trae mensajes viejos a la base de datos de la app. El número que eliges es <i>cuántos por conversación</i> en WhatsApp, y <i>en total</i> en iMessage. Solo <b>guarda</b> los mensajes — todavía no los analiza. Los mensajes nuevos que llegan mientras la app está abierta se capturan solos, sin importar nada.</p>
+            <p><b>2. Procesar mensajes nuevos</b> toma los mensajes que aún <b>no se han analizado</b> y los pasa por la IA para proponer tareas (aparecen en <b>Bandeja</b>). Analiza <b>del más viejo al más nuevo</b>, así que si hay muchos pendientes, los recientes salen al final — puede que tengas que pulsarlo <b>varias veces</b> hasta vaciar la cola.</p>
+            <p>¿Enviaste un mensaje y no aparece? En iMessage primero <b>impórtalo</b>; en WhatsApp se captura solo si esa conversación está <b>incluida</b> en Ajustes. Luego pulsa Procesar. Para la explicación completa, mira la pestaña <b>Ayuda</b>.</p>
+          </div>
+        </details>
+
         <div class="controls">
           <strong>Continuo</strong>
           <button id="backfill" class="primary">Importar historial</button>
@@ -203,6 +214,53 @@
           </div>
         </div>
       </section>
+
+      <!-- AYUDA -->
+      <section id="help" class="panel">
+        <p class="hint">Cómo funciona la app por dentro: de dónde salen los mensajes, qué hace cada botón y por qué a veces un mensaje no aparece de inmediato.</p>
+
+        <div class="help-doc">
+          <h2>1. De dónde salen los mensajes</h2>
+          <p>La app junta dos fuentes en una sola base de datos:</p>
+          <ul>
+            <li><b>iMessage</b> — se lee directamente del Mac (solo lectura). Los mensajes <b>no</b> entran solos: hay que traerlos con <b>Importar historial</b> (o el proceso diario automático).</li>
+            <li><b>WhatsApp</b> — un espejo de WhatsApp Web (solo lectura, nunca envía). Mientras la app está abierta y conectada, los mensajes nuevos se <b>capturan automáticamente</b>. Los viejos se traen con Importar historial.</li>
+          </ul>
+          <p>En <b>Ajustes</b> eliges qué conversaciones se incluyen de cada fuente. Si no eliges ninguna, se incluyen todas.</p>
+
+          <h2>2. “Importar historial” — llenar la base de datos</h2>
+          <p>Trae mensajes <b>antiguos</b> a la app. El número que escribes significa:</p>
+          <ul>
+            <li><b>WhatsApp:</b> cuántos mensajes por <b>cada</b> conversación incluida (p. ej. 200 → los últimos 200 de cada chat).</li>
+            <li><b>iMessage:</b> cuántos mensajes en <b>total</b>, los más recientes primero.</li>
+          </ul>
+          <p>Importar <b>solo guarda</b> los mensajes; todavía no propone tareas. Es normal que después de importar no aparezca nada nuevo en Bandeja hasta que proceses. Volver a importar no duplica: los mensajes ya guardados se ignoran.</p>
+
+          <h2>3. “Procesar mensajes nuevos” — analizar y proponer tareas</h2>
+          <p>Toma los mensajes que aún <b>no se han analizado</b> y los pasa por la IA. De ahí salen las <b>tareas propuestas</b> en la pestaña <b>Bandeja</b>. Además:</p>
+          <ul>
+            <li>Cada imagen o PDF se “lee” con visión (para detectar cotizaciones, fotos de producto, etc.).</li>
+            <li>Un mensaje se marca como <b>analizado</b> una sola vez, así que la próxima vez no se vuelve a gastar en él.</li>
+            <li>Se analiza <b>del más viejo al más nuevo</b>. Si hay una cola grande de pendientes, los mensajes recientes se procesan al final — quizá tengas que pulsar <b>Procesar</b> varias veces hasta vaciarla.</li>
+          </ul>
+
+          <h2>4. “Envié un mensaje y no aparece”</h2>
+          <p>Casi siempre es una de estas tres cosas:</p>
+          <ol>
+            <li><b>iMessage no se captura solo.</b> Primero <b>Importar historial</b>, luego <b>Procesar</b>.</li>
+            <li><b>Esa conversación no está incluida.</b> Revisa la selección de chats en Ajustes.</li>
+            <li><b>Aún está en la cola.</b> Como el análisis va del más viejo al más nuevo, un mensaje recién enviado sale después de los pendientes. Pulsa Procesar hasta que la cola quede vacía (el contador deja de crecer).</li>
+          </ol>
+
+          <h2>5. Rutina recomendada</h2>
+          <ul>
+            <li><b>Día a día:</b> deja la app abierta. WhatsApp se captura solo; pulsa <b>Procesar mensajes nuevos</b> cuando quieras revisar tareas nuevas.</li>
+            <li><b>Puesta al día grande:</b> <b>Importar historial</b> con un número alto, luego <b>Procesar</b> varias veces hasta vaciar la cola.</li>
+            <li><b>Ver tareas:</b> revisa <b>Bandeja</b> (propuestas), apruébalas a <b>Tareas</b>, y usa el enlace <b>📎 ver archivo</b> de una tarea para saltar al archivo que la originó en <b>Adjuntos</b>.</li>
+          </ul>
+        </div>
+      </section>
+
       <!-- AJUSTES -->
       <section id="settings" class="panel">
         <div class="setblock" id="update-block" style="display:none">

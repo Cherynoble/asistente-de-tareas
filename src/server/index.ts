@@ -39,6 +39,7 @@ import {
   deleteMemory,
 } from '../chat/store.js';
 import { nameMap } from '../names.js';
+import { purgeStickers } from '../maintenance.js';
 import { resolveContactName } from '../ingest/contacts.js';
 import { describeAttachment } from '../extract/vision.js';
 import {
@@ -130,8 +131,8 @@ app.get('/api/tasks', (_req, res) => {
   const rows = db()
     .prepare(
       `SELECT t.id, t.title, t.detail, t.client_hint AS clientHint, t.source_quote AS sourceQuote,
-              t.status, t.due_at AS dueAt, t.updated_at AS updatedAt,
-              m.source AS source, m.wa_account AS waAccount
+              t.status, t.due_at AS dueAt, t.updated_at AS updatedAt, t.source_message_id AS sourceMessageId,
+              m.source AS source, m.wa_account AS waAccount, m.has_attachment AS hasAttachment
        FROM tasks t
        LEFT JOIN messages m ON m.id = t.source_message_id
        WHERE t.status IN ('todo','waiting','done') AND t.archived_at IS NULL AND t.deleted_at IS NULL
@@ -941,6 +942,65 @@ app.get('/api/attachments', (req, res) => {
   res.json({ attachments: out, done: rows.length < limit });
 });
 
+/** Locate one message's attachments for the task→file deep link (no chat filter:
+ *  a task's own source file is always viewable, even from a chat not in the
+ *  gallery's included set). Same entry shape as /api/attachments. */
+app.get('/api/attachments/locate', (req, res) => {
+  const messageId = Number(req.query.messageId);
+  if (!Number.isFinite(messageId)) {
+    res.json({ attachments: [] });
+    return;
+  }
+  const r = db()
+    .prepare(
+      `SELECT id, source, wa_account, sender, sender_name, chat_name, ts,
+              attachment_mimes, attachment_names, attachment_paths
+       FROM messages WHERE id = ? AND has_attachment = 1`,
+    )
+    .get(messageId) as
+    | {
+        id: number;
+        source: string;
+        wa_account: string | null;
+        sender: string | null;
+        sender_name: string | null;
+        chat_name: string | null;
+        ts: number;
+        attachment_mimes: string;
+        attachment_names: string;
+        attachment_paths: string;
+      }
+    | undefined;
+  if (!r) {
+    res.json({ attachments: [] });
+    return;
+  }
+  const names = nameMap();
+  const mimes = (r.attachment_mimes || '').split('||');
+  const fnames = (r.attachment_names || '').split('||');
+  const paths = (r.attachment_paths || '').split('||');
+  const out: unknown[] = [];
+  for (let i = 0; i < Math.max(mimes.length, 1); i++) {
+    const mime = mimes[i] || '';
+    const p = paths[i];
+    out.push({
+      id: r.id,
+      i,
+      mime,
+      category: attachmentCategory(mime),
+      filename: fnames[i] || '',
+      ts: r.ts,
+      source: r.source,
+      waAccount: r.wa_account,
+      sender: r.sender,
+      senderName: r.sender === 'me' ? null : names[r.sender ?? ''] || r.sender_name || null,
+      chatName: r.chat_name,
+      hasFile: !!(p && p.trim()),
+    });
+  }
+  res.json({ attachments: out });
+});
+
 /** One-time backfill: import the most recent N iMessages. */
 app.post('/api/backfill', (req, res) => {
   const count = Math.min(Math.max(Number((req.body as { count?: number })?.count ?? 1000), 1), 50000);
@@ -1069,6 +1129,11 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
 const PORT = Number(process.env.PORT ?? 4319);
 app.listen(PORT, () => {
   console.log(`\n  Dad's App dashboard → http://localhost:${PORT}\n`);
+  try {
+    purgeStickers(); // scrub any previously-captured stickers (idempotent)
+  } catch (err) {
+    console.error('[maintenance] sticker purge failed:', err instanceof Error ? err.message : err);
+  }
   applySchedule();
   startNudgeLoop();
   // Fire native notifications for scheduled reminders that come due (every 5 min;
