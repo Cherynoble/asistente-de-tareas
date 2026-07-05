@@ -1215,17 +1215,27 @@ function renderWaCard(st) {
     body.append(el(`<div class="setrow"><span class="saved">✓ Conectado</span></div>`));
     const row = el('<div class="setrow"></div>');
     const bf = el('<button class="primary">Importar historial</button>');
+    const perChatInput = el(
+      '<label>últimos <input class="wa-perchat" type="number" value="200" min="10" max="2000" style="width:5em" /> por chat</label>',
+    );
     const bfStatus = el('<span class="run-status"></span>');
     bf.onclick = async () => {
-      bfStatus.textContent = 'obteniendo… (puede tardar un minuto)';
-      const r = await (
-        await fetch(`/api/whatsapp/accounts/${id}/backfill`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ perChat: 50 }),
-        })
-      ).json();
-      bfStatus.textContent = r.error ? 'error: ' + r.error : `importados ${r.inserted} de ${r.chats} chats`;
+      const perChat = Number(perChatInput.querySelector('input').value) || 200;
+      bf.disabled = true;
+      bfStatus.textContent = `obteniendo ${perChat} por chat… (puede tardar varios minutos)`;
+      try {
+        const r = await (
+          await fetch(`/api/whatsapp/accounts/${id}/backfill`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ perChat }),
+          })
+        ).json();
+        bfStatus.textContent = r.error ? 'error: ' + r.error : `importados ${r.inserted} de ${r.chats} chats`;
+      } catch (err) {
+        bfStatus.textContent = 'error: ' + String(err);
+      }
+      bf.disabled = false;
       loadStats();
     };
     const pick = el('<button>Elegir chats a incluir</button>');
@@ -1239,7 +1249,7 @@ function renderWaCard(st) {
       }
       loadWaAccounts();
     };
-    row.append(bf, pick, bfStatus);
+    row.append(bf, perChatInput, pick, bfStatus);
     body.append(row);
     // Per-account chat picker (filled by loadAccountChats when expanded). Reuse
     // the cached node so a poll-driven card rebuild moves the already-populated

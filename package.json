@@ -1,6 +1,6 @@
 {
   "name": "dads-app",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "private": true,
   "type": "module",
   "description": "Task tracker that ingests iMessage + WhatsApp and proposes tasks via Claude",

@@ -597,7 +597,7 @@ app.post('/api/whatsapp/accounts/:id/repair', async (req, res) => {
 
 /** Backfill recent history for one connected account. */
 app.post('/api/whatsapp/accounts/:id/backfill', async (req, res) => {
-  const perChat = Math.min(Math.max(Number((req.body as { perChat?: number })?.perChat ?? 50), 1), 500);
+  const perChat = Math.min(Math.max(Number((req.body as { perChat?: number })?.perChat ?? 200), 1), 2000);
   try {
     res.json(await backfillAccount(req.params.id, perChat));
   } catch (err) {
