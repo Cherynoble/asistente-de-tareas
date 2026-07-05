@@ -647,7 +647,12 @@ app.get('/api/chats', (_req, res) => {
     res.json({ chats, filtering: selected.size > 0 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    res.status(/authorization|unable to open/i.test(msg) ? 403 : 500).json({ error: msg });
+    // SQLite reports both "file missing" and "permission denied" as the same
+    // "unable to open database file" — so a granted-but-not-effective FDA and a
+    // Mac without Messages set up look identical here. Surface the path so the
+    // user (or we) can tell which, and 403 so the UI shows the recovery steps.
+    const permissionish = /authorization|unable to open|not authorized|operation not permitted|permission denied/i.test(msg);
+    res.status(permissionish ? 403 : 500).json({ error: msg, path: config.chatDbPath });
   }
 });
 

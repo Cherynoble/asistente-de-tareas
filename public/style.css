@@ -120,6 +120,12 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .actions .dismiss { color: var(--red); border-color: #f0c9c9; }
 
 .empty { color: var(--muted); padding: 28px; text-align: center; border: 1px dashed var(--line); border-radius: 10px; }
+.empty.fda-help { text-align: left; color: var(--fg); line-height: 1.55; }
+.empty.fda-help p { margin: 8px 0; }
+.empty.fda-help ol { margin: 8px 0; padding-left: 22px; }
+.empty.fda-help li { margin: 6px 0; }
+.empty.fda-help code { background: var(--line); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.empty.fda-help button { margin-top: 6px; }
 
 .badge { font-size: 11px; padding: 1px 7px; border-radius: 20px; font-weight: 600; }
 .b-todo { background: #e7eefe; color: var(--accent); }

@@ -1257,9 +1257,21 @@ async function loadChats() {
       const msg = (e.error || '').toLowerCase();
       // FDA / permission problem reading ~/Library/Messages/chat.db.
       if (r.status === 403 || msg.includes('unable to open') || msg.includes('authorization')) {
+        const path = e.path ? esc(e.path) : '~/Library/Messages/chat.db';
         list.innerHTML =
-          '<div class="empty">No se puede acceder a iMessage. Concede <b>Acceso total al disco</b> a esta app en ' +
-          'Ajustes del Sistema → Privacidad y seguridad → Acceso total al disco, y vuelve a abrirla.</div>';
+          '<div class="empty fda-help">' +
+          '<b>No se puede leer iMessage todavía.</b>' +
+          '<p>Si ya diste <b>Acceso total al disco</b>, el permiso casi siempre no se aplica hasta reiniciar la app. Prueba en orden:</p>' +
+          '<ol>' +
+          '<li><b>Cierra la app por completo</b> (menú Asistente de Tareas → Salir, o ⌘Q — no solo la ventana) y vuelve a abrirla.</li>' +
+          '<li>Si sigue igual: Ajustes del Sistema → Privacidad y seguridad → <b>Acceso total al disco</b>. <b>Quita</b> “Asistente de Tareas” de la lista con el botón <b>–</b>, vuelve a <b>añadirla</b> con <b>+</b> (o el interruptor apágalo y enciéndelo), y reinicia la app.</li>' +
+          '<li>Asegúrate de que solo haya <b>una copia</b> de la app (p. ej. en Aplicaciones) y de que el permiso esté dado a esa copia.</li>' +
+          '</ol>' +
+          `<p class="muted">Archivo que intenta leer: <code>${path}</code></p>` +
+          '<button id="chats-retry">Reintentar</button>' +
+          '</div>';
+        const retry = document.getElementById('chats-retry');
+        if (retry) retry.onclick = () => loadChats();
       } else {
         list.innerHTML = `<div class="empty">${esc(e.error || 'no se pudieron leer los chats')}</div>`;
       }
