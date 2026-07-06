@@ -703,16 +703,41 @@ function attWho(a) {
     : esc(displayName(a.sender) || a.senderName || prettySender(a.sender, a.senderName));
 }
 
+// The actual media element for a downloaded/available attachment.
+function attMediaHtml(a, src) {
+  if (a.category === 'image') return `<img class="att-thumb" loading="lazy" src="${src}" alt="" />`;
+  if (a.category === 'video') return `<video class="att-thumb" controls preload="metadata" src="${src}"></video>`;
+  if (a.category === 'pdf')
+    return `<a class="att-thumb att-icon" href="${src}" target="_blank" rel="noopener">📄<span>PDF</span></a>`;
+  if (a.category === 'audio') return `<audio controls preload="none" src="${src}"></audio>`;
+  return `<div class="att-thumb att-icon">📎<span>archivo</span></div>`;
+}
+
+// When an <img>/<video> in a card fails to load, replace it with a placeholder.
+function attWireError(card, label) {
+  const m = card.querySelector('img.att-thumb, video.att-thumb');
+  if (m)
+    m.addEventListener('error', () => {
+      const box = card.querySelector('.att-media');
+      if (box) box.innerHTML = `<div class="att-thumb att-icon att-unavail">🚫<span>${label}</span></div>`;
+    });
+}
+
 function attCard(a) {
   const src = `/api/attachment?id=${a.id}&i=${a.i}`;
+  // state: ok = on disk; fetch = WhatsApp not downloaded (load on demand);
+  // fda = iMessage file behind Full Disk Access; missing = not on this Mac.
+  const st = a.state || (a.hasFile ? 'ok' : a.source === 'whatsapp' ? 'fetch' : 'missing');
   let media;
-  if (a.category === 'image') media = `<img class="att-thumb" loading="lazy" src="${src}" alt="" />`;
-  else if (a.category === 'video') media = `<video class="att-thumb" controls preload="metadata" src="${src}"></video>`;
-  else if (a.category === 'pdf')
-    media = `<a class="att-thumb att-icon" href="${src}" target="_blank" rel="noopener">📄<span>PDF</span></a>`;
-  else if (a.category === 'audio') media = `<audio controls preload="none" src="${src}"></audio>`;
-  else media = `<div class="att-thumb att-icon">📎<span>archivo</span></div>`;
+  if (st === 'ok') media = attMediaHtml(a, src);
+  else if (st === 'fetch')
+    media = `<div class="att-thumb att-icon att-unavail"><button class="att-load">⬇ ver archivo</button><span>de WhatsApp</span></div>`;
+  else if (st === 'fda')
+    media = `<div class="att-thumb att-icon att-unavail">🔒<span>Activa Acceso total al disco</span></div>`;
+  else media = `<div class="att-thumb att-icon att-unavail">🚫<span>no está en este Mac</span></div>`;
   const name = a.filename || a.category;
+  // Download only makes sense when the file is (or can be) fetched.
+  const canDownload = st === 'ok' || st === 'fetch';
   const card = el(`<div class="att-card">
     <div class="att-media">${media}</div>
     <div class="att-meta">
@@ -721,16 +746,24 @@ function attCard(a) {
       ${a.chatName ? `<div class="att-sub att-where" title="${esc(a.chatName)}">${esc(a.chatName)}</div>` : ''}
       <div class="att-sub att-when">${esc(fmtMsgTime(a.ts))}</div>
     </div>
-    <a class="att-dl" href="${src}&download=1" title="Descargar una copia">⤓</a>
+    ${canDownload ? `<a class="att-dl" href="${src}&download=1" title="Descargar una copia">⤓</a>` : ''}
   </div>`);
-  // Broken preview (e.g. WhatsApp media that can't be fetched on demand): show a
-  // placeholder but keep the metadata + download button.
-  const img = card.querySelector('img.att-thumb, video.att-thumb');
-  if (img)
-    img.addEventListener('error', () => {
+
+  if (st === 'ok') attWireError(card, 'no disponible');
+
+  // WhatsApp media not downloaded yet: fetch on demand only when the user asks
+  // (auto-fetching a whole gallery of old messages is slow and often fails).
+  const loadBtn = card.querySelector('.att-load');
+  if (loadBtn)
+    loadBtn.onclick = () => {
       const box = card.querySelector('.att-media');
-      if (box) box.innerHTML = '<div class="att-thumb att-icon">🚫<span>no disponible</span></div>';
-    });
+      box.innerHTML = `<div class="att-thumb att-icon"><span>descargando…</span></div>`;
+      // A cache-busting param forces a fresh request that triggers the download.
+      const freshSrc = `${src}&t=${Date.now()}`;
+      box.innerHTML = attMediaHtml(a, freshSrc);
+      attWireError(card, 'no disponible — conecta WhatsApp');
+    };
+
   // Download without navigating the window (would white-screen in Electron).
   const dl = card.querySelector('.att-dl');
   if (dl)

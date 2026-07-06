@@ -888,6 +888,42 @@ function attachmentCategory(mime: string): 'image' | 'pdf' | 'video' | 'audio' |
   return 'other';
 }
 
+/** Does this process actually have Full Disk Access (can it read chat.db)? */
+function hasFda(): boolean {
+  try {
+    fs.accessSync(config.chatDbPath, fs.constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function absOfPath(p: string): string {
+  return p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
+/**
+ * Why an attachment can (or can't) be shown, computed cheaply for the gallery so
+ * a broken tile explains itself instead of just failing to load:
+ *  - 'ok'      : file is on disk, serve it.
+ *  - 'fda'     : an iMessage file whose folder we can't read (Full Disk Access).
+ *  - 'fetch'   : a WhatsApp file not downloaded yet — fetchable on demand (needs
+ *                the account connected); loaded only when the user asks.
+ *  - 'missing' : file isn't on this Mac (deleted, or offloaded to iCloud).
+ */
+function attachmentState(source: string, storedPath: string | undefined, fda: boolean): 'ok' | 'fda' | 'fetch' | 'missing' {
+  const p = (storedPath || '').trim();
+  if (p) {
+    if (source === 'imessage' && !fda) return 'fda';
+    try {
+      return fs.existsSync(absOfPath(p)) ? 'ok' : 'missing';
+    } catch {
+      return 'missing';
+    }
+  }
+  return source === 'whatsapp' ? 'fetch' : 'missing';
+}
+
 /** Persistent attachment gallery: one entry per attachment on messages that have
  *  them, newest first, respecting the included-chats selection, paginated. */
 app.get('/api/attachments', (req, res) => {
@@ -920,6 +956,7 @@ app.get('/api/attachments', (req, res) => {
   }[];
 
   const names = nameMap();
+  const fda = hasFda();
   const out: unknown[] = [];
   for (const r of rows) {
     const mimes = (r.attachment_mimes || '').split('||');
@@ -941,6 +978,7 @@ app.get('/api/attachments', (req, res) => {
         senderName: r.sender === 'me' ? null : names[r.sender ?? ''] || r.sender_name || null,
         chatName: r.chat_name,
         hasFile: !!(p && p.trim()),
+        state: attachmentState(r.source, p, fda),
       });
     }
   }
@@ -981,6 +1019,7 @@ app.get('/api/attachments/locate', (req, res) => {
     return;
   }
   const names = nameMap();
+  const fda = hasFda();
   const mimes = (r.attachment_mimes || '').split('||');
   const fnames = (r.attachment_names || '').split('||');
   const paths = (r.attachment_paths || '').split('||');
@@ -1001,6 +1040,7 @@ app.get('/api/attachments/locate', (req, res) => {
       senderName: r.sender === 'me' ? null : names[r.sender ?? ''] || r.sender_name || null,
       chatName: r.chat_name,
       hasFile: !!(p && p.trim()),
+      state: attachmentState(r.source, p, fda),
     });
   }
   res.json({ attachments: out });
