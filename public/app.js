@@ -642,7 +642,7 @@ async function renderFocus() {
     };
     box.append(head);
     const grid = el('<div class="att-grid"></div>');
-    for (const a of items) grid.append(attCard(a));
+    items.forEach((a, i) => grid.append(attCard(a, items, i)));
     box.append(grid);
     box.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch {
@@ -723,7 +723,7 @@ function attWireError(card, label) {
     });
 }
 
-function attCard(a) {
+function attCard(a, list, idx) {
   const src = `/api/attachment?id=${a.id}&i=${a.i}`;
   // state: ok = on disk; fetch = WhatsApp not downloaded (load on demand);
   // fda = iMessage file behind Full Disk Access; missing = not on this Mac.
@@ -739,7 +739,7 @@ function attCard(a) {
   // Download only makes sense when the file is (or can be) fetched.
   const canDownload = st === 'ok' || st === 'fetch';
   const card = el(`<div class="att-card">
-    <div class="att-media">${media}</div>
+    <div class="att-media">${media}<button class="att-expand" title="Vista previa">⤢</button></div>
     <div class="att-meta">
       <div class="att-name" title="${esc(name)}">${esc(name)}</div>
       <div class="att-sub">${sourceBadge(a.source)}${accountBadge(a.source, a.waAccount)} ${attWho(a)}</div>
@@ -748,6 +748,16 @@ function attCard(a) {
     </div>
     ${canDownload ? `<a class="att-dl" href="${src}&download=1" title="Descargar una copia">⤓</a>` : ''}
   </div>`);
+
+  // Open the Quick-Look-style preview from the ⤢ button, or by clicking the tile
+  // (but not on a control/link inside it — let video/audio/PDF behave normally).
+  const openHere = () => openLightbox(list || [a], list ? idx : 0);
+  card.querySelector('.att-expand').onclick = (e) => { e.preventDefault(); e.stopPropagation(); openHere(); };
+  const mediaBox = card.querySelector('.att-media');
+  mediaBox.addEventListener('click', (e) => {
+    if (e.target.closest('button, a, video, audio')) return;
+    openHere();
+  });
 
   if (st === 'ok') attWireError(card, 'no disponible');
 
@@ -792,7 +802,7 @@ function renderAttachments() {
       ),
     );
   } else {
-    for (const a of items) grid.append(attCard(a));
+    items.forEach((a, i) => grid.append(attCard(a, items, i)));
   }
   $('#att-more').hidden = attDone;
 }
@@ -800,6 +810,114 @@ function renderAttachments() {
 $('#att-search').addEventListener('input', renderAttachments);
 $('#att-type').addEventListener('change', renderAttachments);
 $('#att-more').addEventListener('click', () => loadAttachments(false));
+
+// ---- Quick-Look-style preview (lightbox) ----
+let qlList = [];
+let qlIdx = 0;
+
+// The large preview element for an available file.
+function qlOkMedia(a, src) {
+  if (a.category === 'image') return `<img class="ql-media" src="${src}" alt="" />`;
+  if (a.category === 'video') return `<video class="ql-media" controls autoplay src="${src}"></video>`;
+  if (a.category === 'audio') return `<audio class="ql-audio" controls autoplay src="${src}"></audio>`;
+  if (a.category === 'pdf') return `<iframe class="ql-frame" src="${src}"></iframe>`;
+  return `<div class="ql-note">📎<div>Este tipo de archivo no se puede previsualizar. Usa “Descargar copia”.</div></div>`;
+}
+
+function qlStageHtml(a, src, st) {
+  if (st === 'ok') return qlOkMedia(a, src);
+  if (st === 'fetch') return `<div class="ql-note">📥<button class="ql-load">Descargar de WhatsApp para ver</button></div>`;
+  if (st === 'fda')
+    return `<div class="ql-note">🔒<div>Activa <b>Acceso total al disco</b> para ver los archivos de iMessage.</div></div>`;
+  return `<div class="ql-note">🚫<div>Este archivo no está en este Mac (se borró o está en iCloud).</div></div>`;
+}
+
+function qlRender() {
+  const a = qlList[qlIdx];
+  const stage = $('#ql-overlay .ql-stage');
+  const cap = $('#ql-overlay .ql-caption');
+  if (!a || !stage) return;
+  const src = `/api/attachment?id=${a.id}&i=${a.i}`;
+  const st = a.state || (a.hasFile ? 'ok' : a.source === 'whatsapp' ? 'fetch' : 'missing');
+  stage.innerHTML = qlStageHtml(a, src, st);
+
+  // Load-on-demand WhatsApp file inside the preview.
+  const loadBtn = stage.querySelector('.ql-load');
+  if (loadBtn)
+    loadBtn.onclick = () => {
+      stage.innerHTML = `<div class="ql-note"><div>Descargando…</div></div>`;
+      stage.innerHTML = qlOkMedia(a, `${src}&t=${Date.now()}`);
+      const m = stage.querySelector('img.ql-media, video.ql-media');
+      if (m) m.addEventListener('error', () => {
+        stage.innerHTML = `<div class="ql-note">🚫<div>No disponible — conecta WhatsApp e inténtalo de nuevo.</div></div>`;
+      });
+    };
+  const okMedia = stage.querySelector('img.ql-media, video.ql-media');
+  if (st === 'ok' && okMedia)
+    okMedia.addEventListener('error', () => {
+      stage.innerHTML = `<div class="ql-note">🚫<div>No se pudo cargar el archivo.</div></div>`;
+    });
+
+  const name = a.filename || a.category;
+  const canDownload = st === 'ok' || st === 'fetch';
+  cap.innerHTML =
+    `<div class="ql-name" title="${esc(name)}">${esc(name)}</div>` +
+    `<div class="ql-sub">${sourceBadge(a.source)}${accountBadge(a.source, a.waAccount)} ${attWho(a)}` +
+    `${a.chatName ? ` · ${esc(a.chatName)}` : ''} · ${esc(fmtMsgTime(a.ts))}</div>` +
+    `<div class="ql-tools">` +
+    `${canDownload ? `<button class="ql-dl">⤓ Descargar copia</button>` : ''}` +
+    `${a.category === 'pdf' && st === 'ok' ? `<a class="ql-open" href="${src}" target="_blank" rel="noopener">Abrir en pestaña</a>` : ''}` +
+    `<span class="ql-pos">${qlIdx + 1} / ${qlList.length}</span></div>`;
+  const dlb = cap.querySelector('.ql-dl');
+  if (dlb) dlb.onclick = () => downloadFile(`${src}&download=1`, name);
+
+  $('#ql-overlay .ql-prev').disabled = qlIdx <= 0;
+  $('#ql-overlay .ql-next').disabled = qlIdx >= qlList.length - 1;
+}
+
+function openLightbox(list, idx) {
+  qlList = Array.isArray(list) && list.length ? list : [];
+  qlIdx = Math.max(0, Math.min(idx || 0, qlList.length - 1));
+  if (!qlList.length) return;
+  const ov = $('#ql-overlay');
+  ov.hidden = false;
+  ov.style.display = 'flex';
+  qlRender();
+}
+
+function closeLightbox() {
+  const ov = $('#ql-overlay');
+  if (!ov) return;
+  ov.hidden = true;
+  ov.style.display = 'none';
+  const stage = ov.querySelector('.ql-stage');
+  if (stage) stage.innerHTML = ''; // stop any playing video/audio
+}
+
+function qlNav(delta) {
+  const n = qlIdx + delta;
+  if (n < 0 || n >= qlList.length) return;
+  qlIdx = n;
+  qlRender();
+}
+
+$('#ql-overlay .ql-close').onclick = closeLightbox;
+$('#ql-overlay .ql-prev').onclick = () => qlNav(-1);
+$('#ql-overlay .ql-next').onclick = () => qlNav(1);
+$('#ql-overlay').addEventListener('click', (e) => {
+  if (e.target.id === 'ql-overlay') closeLightbox(); // click the backdrop
+});
+document.addEventListener('keydown', (e) => {
+  const ov = $('#ql-overlay');
+  if (!ov || ov.hidden) return;
+  if (e.key === 'Escape') { e.preventDefault(); closeLightbox(); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); qlNav(-1); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); qlNav(1); }
+  else if (e.key === ' ' && !e.target.closest('video, audio, button, a, input, textarea')) {
+    e.preventDefault();
+    closeLightbox(); // spacebar closes, like Quick Look
+  }
+});
 
 // ---- Trash ----
 let trashData = { tasks: [], clients: [] };
@@ -1092,9 +1210,36 @@ async function checkDigest() {
       body.append(sec);
     }
     if (newTasks.length) {
-      const sec = el(`<div class="dsec"><h4>🆕 Tareas propuestas nuevas (${newTasks.length})</h4></div>`);
-      for (const t of newTasks)
-        sec.append(el(`<div class="ditem"><div class="dt">${esc(t.title)}</div>${t.clientHint ? `<div class="dd">cliente: ${esc(displayName(t.clientHint))}</div>` : ''}</div>`));
+      const sec = el(`<div class="dsec"><h4>🆕 Tareas propuestas nuevas <span class="dg-count">(${newTasks.length})</span></h4></div>`);
+      for (const t of newTasks) {
+        const item = el(`<div class="ditem ditem-task">
+          <div class="dt">${esc(t.title)}</div>
+          ${t.clientHint ? `<div class="dd">cliente: ${esc(displayName(t.clientHint))}</div>` : ''}
+          <div class="dactions">
+            <button class="approve j-dg-approve">✓ Aprobar</button>
+            <button class="dismiss j-dg-dismiss">🗑 Descartar</button>
+          </div>
+        </div>`);
+        const settle = (label) => {
+          item.classList.add('actioned');
+          const act = item.querySelector('.dactions');
+          if (act) act.innerHTML = `<span class="dg-done">${label}</span>`;
+          const left = sec.querySelectorAll('.ditem-task:not(.actioned)').length;
+          const cnt = sec.querySelector('.dg-count');
+          if (cnt) cnt.textContent = `(${left})`;
+        };
+        item.querySelector('.j-dg-approve').onclick = async (e) => {
+          e.target.disabled = true;
+          await setStatus(t.id, 'todo'); // → Tareas (existing endpoint)
+          settle('✓ Aprobada');
+        };
+        item.querySelector('.j-dg-dismiss').onclick = async (e) => {
+          e.target.disabled = true;
+          await deleteTask(t.id); // → Papelera (existing bulk-delete)
+          settle('🗑 Descartada');
+        };
+        sec.append(item);
+      }
       body.append(sec);
     }
     if (!hasContent) {
