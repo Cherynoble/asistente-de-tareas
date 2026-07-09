@@ -278,7 +278,17 @@ select.status { padding: 5px 8px; border: 1px solid var(--line); border-radius: 
 .sender input { padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; font-size: 13px; }
 .sender .nm { width: 150px; }
 .sender .pn { flex: 1; min-width: 160px; }
+.sender .cat { min-width: 120px; }
 .sender .saved { color: var(--green); font-size: 12px; }
+
+/* Category filter chips (Clientes) */
+.clientcats { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.clientcats .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.clientcats .chip { background: #eef1f6; border: 1px solid #d7dde6; color: var(--ink); padding: 4px 11px; border-radius: 999px; cursor: pointer; font-size: 13px; font-weight: 550; }
+.clientcats .chip:hover { filter: brightness(0.97); }
+.clientcats .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.clientcats .chip .chip-n { opacity: 0.7; font-weight: 400; margin-left: 3px; }
+#clients-autoclass { margin-left: auto; }
 
 /* Chat */
 .chat-layout { display: flex; gap: 16px; align-items: stretch; }

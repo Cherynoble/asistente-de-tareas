@@ -47,8 +47,9 @@ function migrate(d: Database.Database): void {
   ensureColumn(d, 'tasks', 'last_nudge_at', 'INTEGER');
   ensureColumn(d, 'tasks', 'archived_at', 'INTEGER');
   ensureColumn(d, 'tasks', 'deleted_at', 'INTEGER');
-  // clients: trash support.
+  // clients: trash support + Personal/Oficina (or custom) categorization.
   ensureColumn(d, 'clients', 'deleted_at', 'INTEGER');
+  ensureColumn(d, 'clients', 'category', `TEXT NOT NULL DEFAULT ''`);
   // chat_messages: attachments added in 0.3.0 (only if the table predates it).
   ensureColumn(d, 'chat_messages', 'attachments', `TEXT NOT NULL DEFAULT ''`);
 }

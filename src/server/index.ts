@@ -40,6 +40,7 @@ import {
 } from '../chat/store.js';
 import { nameMap } from '../names.js';
 import { purgeStickers } from '../maintenance.js';
+import { autoClassifyClients } from '../clients/classify.js';
 import { resolveContactName } from '../ingest/contacts.js';
 import { describeAttachment } from '../extract/vision.js';
 import {
@@ -340,7 +341,13 @@ app.get('/api/senders', (_req, res) => {
     if (!allowed.length) noneAllowed = true;
   }
 
-  type Row = { handle: string; count: number; name: string | null; productNeed: string | null };
+  type Row = {
+    handle: string;
+    count: number;
+    name: string | null;
+    productNeed: string | null;
+    category: string | null;
+  };
   const byHandle = new Map<string, Row>();
 
   // 1) Message senders (subject to the selected-chats filter).
@@ -351,7 +358,8 @@ app.get('/api/senders', (_req, res) => {
       (filtering ? ` AND m.chat_id IN (${allowed.map(() => '?').join(',')})` : '');
     const rows = d
       .prepare(
-        `SELECT m.sender AS handle, COUNT(*) AS count, c.name AS name, c.product_need AS productNeed
+        `SELECT m.sender AS handle, COUNT(*) AS count, c.name AS name, c.product_need AS productNeed,
+                c.category AS category
          FROM messages m
          LEFT JOIN clients c ON c.handle = m.sender AND c.deleted_at IS NULL
          ${where}
@@ -375,9 +383,17 @@ app.get('/api/senders', (_req, res) => {
   for (const { h } of taskClients) {
     if (byHandle.has(h) || deleted.has(h)) continue;
     const c = d
-      .prepare(`SELECT name, product_need AS productNeed FROM clients WHERE handle = ? AND deleted_at IS NULL`)
-      .get(h) as { name: string; productNeed: string } | undefined;
-    byHandle.set(h, { handle: h, count: 0, name: c?.name ?? null, productNeed: c?.productNeed ?? null });
+      .prepare(
+        `SELECT name, product_need AS productNeed, category FROM clients WHERE handle = ? AND deleted_at IS NULL`,
+      )
+      .get(h) as { name: string; productNeed: string; category: string } | undefined;
+    byHandle.set(h, {
+      handle: h,
+      count: 0,
+      name: c?.name ?? null,
+      productNeed: c?.productNeed ?? null,
+      category: c?.category ?? null,
+    });
   }
 
   const names = nameMap();
@@ -409,6 +425,41 @@ app.post('/api/clients', (req, res) => {
     )
     .run({ handle, name: name.trim(), productNeed: (productNeed ?? '').trim(), now });
   res.json({ ok: true });
+});
+
+/** Set (or clear) a client's category — Personal / Oficina / custom / '' — for a
+ *  handle, creating the client row if it doesn't exist yet. */
+app.post('/api/clients/category', (req, res) => {
+  const { handle, category } = req.body as { handle?: string; category?: string };
+  if (!handle) {
+    res.status(400).json({ error: 'handle required' });
+    return;
+  }
+  const cat = (category ?? '').trim().slice(0, 40);
+  const now = Date.now();
+  const name = nameMap()[handle] || ''; // don't bake a phone number into the name
+  db()
+    .prepare(
+      `INSERT INTO clients (handle, name, category, created_at, updated_at)
+       VALUES (@handle, @name, @cat, @now, @now)
+       ON CONFLICT(handle) DO UPDATE SET category = excluded.category, deleted_at = NULL, updated_at = excluded.updated_at`,
+    )
+    .run({ handle, name, cat, now });
+  res.json({ ok: true });
+});
+
+/** Auto-tag still-unclassified clients as Personal/Oficina with a quick AI pass. */
+app.post('/api/clients/autoclassify', async (_req, res) => {
+  if (!getApiKey()) {
+    res.status(400).json({ error: 'No ANTHROPIC_API_KEY set in .env' });
+    return;
+  }
+  try {
+    const result = await autoClassifyClients();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 /** handle → display name (manual > macOS Contacts > WhatsApp pushname). */

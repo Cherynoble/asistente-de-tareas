@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS clients (
   name          TEXT    NOT NULL,            -- WhatsApp/chat display name
   handle        TEXT    UNIQUE,              -- phone/handle, if known
   product_need  TEXT    NOT NULL DEFAULT '', -- free text: what they buy / need
+  category      TEXT    NOT NULL DEFAULT '', -- Personal / Oficina / custom; '' = sin clasificar
   deleted_at    INTEGER,                     -- soft-delete to Trash; NULL = active
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
