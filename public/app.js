@@ -6,6 +6,39 @@ const el = (html) => {
 };
 const esc = (s) =>
   (s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// In-app text prompt. Electron doesn't implement window.prompt() (it silently
+// returns null), so we roll our own. Resolves to the string, or null on cancel.
+function askText(message, defaultValue = '') {
+  return new Promise((resolve) => {
+    const ov = el(`<div class="overlay askmodal" style="display:flex;">
+      <div class="modal ask-box">
+        <div class="ask-msg">${esc(message)}</div>
+        <input class="ask-input" value="${esc(defaultValue)}" />
+        <div class="modal-actions">
+          <button class="ask-cancel">Cancelar</button>
+          <button class="primary ask-ok">Aceptar</button>
+        </div>
+      </div>
+    </div>`);
+    document.body.append(ov);
+    const input = ov.querySelector('.ask-input');
+    const done = (val) => {
+      ov.remove();
+      resolve(val);
+    };
+    ov.querySelector('.ask-ok').onclick = () => done(input.value);
+    ov.querySelector('.ask-cancel').onclick = () => done(null);
+    ov.addEventListener('click', (e) => {
+      if (e.target === ov) done(null);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); done(input.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); done(null); }
+    });
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+  });
+}
 // Short Spanish date for "task generated on" labels.
 const fmtGen = (ms) =>
   ms ? new Date(ms).toLocaleDateString('es', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
@@ -637,7 +670,7 @@ function renderSenders() {
     card.querySelector('.cat').onchange = async (e) => {
       let val = e.target.value;
       if (val === '__new__') {
-        val = (prompt('Nueva categoría (p. ej. Proveedor):') || '').trim();
+        val = ((await askText('Nueva categoría (p. ej. Proveedor):')) || '').trim();
         if (!val) { e.target.value = s.category || ''; return; }
       }
       await fetch('/api/clients/category', {
@@ -1770,7 +1803,7 @@ async function waRepair(id) {
   setTimeout(loadWaAccounts, 1500);
 }
 async function waRename(id, current) {
-  const label = prompt('Nombre para esta cuenta (deja vacío para usar el nombre de WhatsApp):', current || '');
+  const label = await askText('Nombre para esta cuenta (deja vacío para usar el nombre de WhatsApp):', current || '');
   if (label === null) return;
   await fetch(`/api/whatsapp/accounts/${id}/label`, {
     method: 'POST',

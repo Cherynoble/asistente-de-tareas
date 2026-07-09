@@ -342,6 +342,13 @@ select.status { padding: 5px 8px; border: 1px solid var(--line); border-radius: 
 .modal .ditem .dg-done { font-size: 13px; font-weight: 600; color: var(--muted); }
 .modal-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
 
+/* In-app text prompt (replaces window.prompt, which Electron doesn't support) */
+.askmodal { z-index: 120; }
+.ask-box { max-width: 400px; }
+.ask-box .ask-msg { font-size: 14px; margin-bottom: 10px; }
+.ask-box .ask-input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
+.ask-box .modal-actions { gap: 8px; margin-top: 14px; }
+
 /* WhatsApp */
 .wa-qr { width: 240px; height: 240px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 6px; display: block; }
 #wa-status { vertical-align: middle; }
