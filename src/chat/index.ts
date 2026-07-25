@@ -335,10 +335,14 @@ export async function runTurn(
 ): Promise<{ reply: string; usedTools: string[] }> {
   addMessage(threadId, 'user', userText, attachments);
 
-  const messages: Anthropic.MessageParam[] = threadMessages(threadId).map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
+  // Drop any empty-content message (the API rejects empty text blocks, and one
+  // bad stored row would otherwise make every future turn in the thread fail).
+  const messages: Anthropic.MessageParam[] = threadMessages(threadId)
+    .filter((m) => m.content.trim() !== '')
+    .map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
   const client = anthropicClient();
   const usedTools: string[] = [];
   let reply = '';
@@ -376,6 +380,9 @@ export async function runTurn(
     break;
   }
 
+  // Never persist an empty reply — it would poison the thread's history for
+  // every later API call (empty text blocks are rejected).
+  if (!reply.trim()) reply = 'Listo.';
   addMessage(threadId, 'assistant', reply);
   return { reply, usedTools };
 }

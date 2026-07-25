@@ -50,9 +50,12 @@ const SELECT_CORE = /* sql */ `
     c.display_name                      AS display_name,
     c.guid                              AS chat_guid,
     COUNT(a.ROWID)                      AS attachment_count,
-    GROUP_CONCAT(a.mime_type, '||')     AS attachment_mimes,
-    GROUP_CONCAT(a.transfer_name, '||') AS attachment_names,
-    GROUP_CONCAT(a.filename, '||')      AS attachment_paths
+    -- COALESCE keeps the three lists positionally aligned: GROUP_CONCAT skips
+    -- NULLs, so a NULL mime/name/filename on one attachment would otherwise
+    -- shift that list and pair index i with the wrong file everywhere downstream.
+    GROUP_CONCAT(COALESCE(a.mime_type, ''), '||')     AS attachment_mimes,
+    GROUP_CONCAT(COALESCE(a.transfer_name, ''), '||') AS attachment_names,
+    GROUP_CONCAT(COALESCE(a.filename, ''), '||')      AS attachment_paths
   FROM message m
   LEFT JOIN handle h                  ON m.handle_id = h.ROWID
   LEFT JOIN chat_message_join j       ON j.message_id = m.ROWID
@@ -61,9 +64,12 @@ const SELECT_CORE = /* sql */ `
   LEFT JOIN attachment a              ON a.ROWID = k.attachment_id
 `;
 
+/** Split a '||'-joined list, PRESERVING positions (empty slots stay empty) so
+ *  mimes[i]/names[i]/paths[i] always refer to the same attachment. */
 function splitList(s: string | null): string[] {
   if (!s) return [];
-  return s.split('||').filter((x) => x && x.length > 0);
+  const parts = s.split('||');
+  return parts.every((x) => x === '') ? [] : parts;
 }
 
 function mapRow(r: RawRow): IMessageRow | null {
@@ -77,7 +83,8 @@ function mapRow(r: RawRow): IMessageRow | null {
   const paths = splitList(r.attachment_paths);
 
   if (!body && hasAttachment) {
-    const label = names.length ? names.join(', ') : mimes.join(', ');
+    const shown = names.filter(Boolean).length ? names : mimes;
+    const label = shown.filter(Boolean).join(', ');
     body = `[attachment: ${label || 'file'}]`;
   }
   if (!body) return null;

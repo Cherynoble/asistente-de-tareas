@@ -76,7 +76,7 @@ export function buildDigest(now = Date.now()): Digest {
   const lead = (overdue.length ? overdue : tasks).slice(0, 3);
   const more = tasks.length - lead.length;
   const message =
-    lead.map((t) => t.title).join('; ') + (more > 0 ? ` +${more} more` : '');
+    lead.map((t) => t.title).join('; ') + (more > 0 ? ` +${more} más` : '');
   return { title, subtitle, message, counts, tasks };
 }
 
