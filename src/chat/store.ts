@@ -79,6 +79,18 @@ export function titleFrom(text: string): string {
   return t.length > 48 ? t.slice(0, 47) + '…' : t || 'Nueva conversación';
 }
 
+/**
+ * Sentinels wrapping a pasted message selection inside a chat message's content.
+ *
+ * The transcript has to live in `content` because that is what gets replayed to
+ * the model on every later turn. The frontend splits on these markers to render
+ * it collapsed instead of dumping 200 lines into a bubble — visible if you open
+ * it, out of the way if you don't. `public/app.js` hardcodes the same two
+ * strings; change one and you must change the other.
+ */
+export const SEL_OPEN = '⟦SELECCIÓN⟧';
+export const SEL_CLOSE = '⟦/SELECCIÓN⟧';
+
 // ---- Memory ----
 export function listMemories(): Memory[] {
   return db()

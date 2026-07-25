@@ -39,6 +39,7 @@ Current version at time of writing: **1.5.1** (see `package.json`).
 | iMessage reader (`chat.db` SQL, `attributedBody` decode) | `src/ingest/imessage/reader.ts`, `.../attributedBody.ts`, `.../ingest.ts` |
 | WhatsApp mirror (session, watchdogs, media download) | `src/ingest/whatsapp/client.ts` |
 | Task extraction + live pipeline (SSE) | `src/extract/pipeline.ts`, `src/extract/claude.ts`, `src/extract/vision.ts` |
+| Message browser queries (Mensajes tab) | `src/messages/browse.ts` |
 | Chat agent (tools: search/find/read_attachment, memory, create_task) | `src/chat/index.ts`, `src/chat/store.ts` |
 | Client auto-tagging (Personal/Oficina) | `src/clients/classify.ts` |
 | Reminders / digest / nudges | `src/notify/reminders.ts`, `.../scheduled.ts`, `.../mac.ts` |
@@ -50,7 +51,7 @@ Current version at time of writing: **1.5.1** (see `package.json`).
 | Release publisher | `scripts/release.mjs` |
 | Frontend (all UI logic) | `public/app.js`, `public/index.html`, `public/style.css` |
 
-**UI tabs:** Bandeja · Tareas · Archivo · Papelera · Clientes · Adjuntos · Chat · Proceso · Ayuda · Ajustes.
+**UI tabs:** Bandeja · Tareas · Archivo · Papelera · Clientes · Adjuntos · **Mensajes** · Chat · Proceso · Ayuda · Ajustes.
 
 ---
 
@@ -163,6 +164,10 @@ Each tile has a server-computed `state` (`/api/attachments`, `attachmentState()`
   on the receiving Mac clear quarantine with `xattr -cr "…/Asistente de Tareas.app"`.
 - **CSS specificity trap:** `button:not(.tab)` (0,1,1) beats a bare `.chip`/`.ql-btn` (0,1,0).
   Scope custom button styles under a parent (`.clientcats .chip`, `.ql-overlay .ql-btn`).
+- **Buttons collapsing inside a scrolling flex column:** the same base rule sets
+  `overflow: hidden`, which disables the automatic `min-height: auto` that stops a flex item
+  shrinking below its content. Symptom: list rows squash to ~18px and their secondary lines
+  render at zero height. Fix is `flex: none` on the row (see `.msg-chats .msg-chat`).
 
 ### Database / migrations
 
@@ -184,6 +189,15 @@ Each tile has a server-computed `state` (`/api/attachments`, `attachmentState()`
   so tasks from them never appeared even though the chat could recall them.)
 - **Concurrency guard:** module-level `processingNow` flag prevents the manual run + daily cron
   from double-proposing the same rows.
+- **Vision budget** = number of `describeAttachment` calls, shared across ALL batches of a run.
+  Since 1.7.0 `enrichVision` describes **every** qualifying attachment on a message, not just
+  the first (a 5-photo message used to yield one description at any cap), and the nightly cron's
+  cap went 20 → 200. Both mattered because the row is marked `processed = 1` regardless, so an
+  undescribed file is lost permanently. Caps: manual "Procesar" 1000, cron 200, Mensajes
+  selection ≤40.
+- **"Analizar" in Mensajes is a preview run** (`analyzeSelection`): it ignores and never sets
+  `processed`, so re-checking can't drain the pipeline queue and is repeatable. If it proposes
+  nothing, that is usually the dedup working — the extractor is given the open tasks.
 - **Import ≠ process:** "Importar historial" only fills the DB; "Procesar mensajes nuevos"
   analyzes unprocessed rows. WhatsApp import count is **per chat**; iMessage is **total**.
 - Extractor keeps `source_quote` verbatim (used for WhatsApp/iMessage text search); `title`/`detail` are Spanish.
@@ -231,8 +245,19 @@ temp file and `ALTER TABLE … ADD COLUMN …` there first (never mutate the liv
 
 ## 7. Verification note
 
-Live browser verification is usually **skipped** in this project because starting the dev
-server reconnects the owner's live WhatsApp session. Changes are validated by `tsc --noEmit`
+**The offline harness is how frontend work gets verified** while the owner's WhatsApp session
+is live (recipe in `PROJECT_STATE.md` §10). Two things that will waste your time otherwise:
+
+- **Check `window.innerWidth` before trusting any geometry.** A newly opened or re-navigated
+  browser-pane tab can report a 0×0 viewport, in which case every width/height you measure is
+  garbage (bubbles "collapse to 26px", rows look 700px tall). Resize, then measure.
+- **Disable transitions before sampling colour.** `button:not(.tab)` transitions `color`, so a
+  theme flip animates and `getComputedStyle` returns a mid-flight `oklab(...)` value. Inject
+  `*{transition:none!important;animation:none!important}` first, or you will chase contrast
+  "failures" that do not exist.
+
+Live browser verification against the real dev server is **skipped** in this project because
+starting it reconnects the owner's live WhatsApp session. Changes are validated by `tsc --noEmit`
 + `node --check` + read-only SQL against the real DB. When a change is genuinely frontend-only
 and the app isn't running, a throwaway dev instance can be used — but confirm the WhatsApp
 session isn't live first.

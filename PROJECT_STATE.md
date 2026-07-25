@@ -1,6 +1,6 @@
 # Dad's App — Project State & Contributor Guide
 
-**Snapshot: version 1.6.1 (released 2026-07-25).** This is the "how it actually works
+**Snapshot: version 1.7.0 (released 2026-07-25).** This is the "how it actually works
 and how to change it safely" document. The other two docs cover different questions:
 
 | Doc | Answers |
@@ -123,7 +123,18 @@ is also why adding it needed no schema change and shipped as a normal code updat
     portrait media ends up in a narrow strip. Position them `absolute; inset: 0` and let
     `object-fit` crop. (Where aspect ratio *should* be preserved — the lightbox, the
     Proceso thumbnails — flex children are correct and intentional.)
-12. **The theme is always stamped explicitly.** An inline resolver in `index.html`'s
+12. **A button inside a scrolling flex column needs `flex: none`.** `button:not(.tab)`
+    sets `overflow: hidden` (it clips the hover sweep), and that switches off the
+    automatic `min-height: auto` which normally stops a flex item shrinking below its
+    content. Without `flex: none` the rows silently compress — 101 sidebar rows in
+    `.msg-chats` collapsed from 80px to 18px each, with every secondary line at zero
+    height. Plain `div` rows (`.msg-row`) are unaffected because their overflow is visible.
+13. **`--faint` does not clear AA on the translucent stacks.** It is calibrated for the
+    surfaces it already sits on; over a glass bubble inside a glass thread over the
+    ambient wash it composites to ~4.1:1, and under the `--accent-wash` of a selected
+    row even `--muted` drops to 4.43:1. Sample the composited pixel (§10) rather than
+    assuming a token is safe in a new context.
+14. **The theme is always stamped explicitly.** An inline resolver in `index.html`'s
     `<head>` writes `<html data-theme="light|dark">` before first paint (no flash) and
     re-resolves on OS change when the preference is `auto`. `style.css` therefore has
     **no `prefers-color-scheme` query for tokens**: light lives in `:root`, dark in
@@ -154,6 +165,30 @@ no `processed` filter), and re-imports reported "0 new". The `done` SSE event no
 **ingestion**, not processing. Messages already imported from a chat that is later
 deselected will still be analyzed while they remain unprocessed.
 
+### Vision budgets (rebalanced in 1.7.0)
+
+The budget is a count of `describeAttachment` calls, **shared across every batch of one
+run**, and `enrichVision` now describes **every** qualifying attachment on a row rather
+than only the first. Both of those used to lose data permanently, because a row is marked
+`processed = 1` whether or not its files were ever looked at.
+
+| Caller | Cap | Note |
+|---|---|---|
+| "Procesar mensajes nuevos" | 1000 (clamped ≤2000) | effectively "analyze every new file" |
+| Nightly cron | **200** (was 20) | one run covers up to 50 × 120 = 6,000 messages |
+| Mensajes → "Analizar" | ≤40 per run, 200 messages max | hand-picked; the UI states the file count up front |
+
+### Re-analysis is a preview run
+
+`analyzeSelection()` (Mensajes tab) deliberately **ignores and never sets `processed`**.
+Re-checking a message therefore can't quietly drain it from the normal pipeline queue, and
+the same selection can be run again. Proposed tasks land in Bandeja like any other. When it
+returns nothing, that usually means "already covered" — the extractor is handed the open
+tasks and told not to duplicate them — so the UI says so and lists related open tasks
+rather than showing a bare zero. Those related tasks are a **relatedness heuristic** (same
+source message or client hint), not the extractor's actual dedup decision, which it doesn't
+report.
+
 ---
 
 ## 6. Module map
@@ -166,6 +201,7 @@ deselected will still be analyzed while they remain unprocessed.
 | iMessage reader (+ `attributedBody` decode) | `src/ingest/imessage/{reader,ingest,attributedBody}.ts` |
 | WhatsApp mirror (multi-account, watchdogs, media) | `src/ingest/whatsapp/client.ts` |
 | Extraction + live pipeline | `src/extract/{pipeline,claude,vision,types}.ts` |
+| Message-browser queries (Mensajes tab) | `src/messages/browse.ts` |
 | Chat agent (6 tools) | `src/chat/index.ts`, `src/chat/store.ts` |
 | Client auto-tagging | `src/clients/classify.ts` |
 | Reminders / digest / nudges | `src/notify/{reminders,scheduled,mac}.ts` |
@@ -175,7 +211,7 @@ deselected will still be analyzed while they remain unprocessed.
 | Electron shell / updater | `electron/{main,updater,preload}.cjs` |
 | Frontend (no bundler, no framework) — see §6a | `public/{app.js,index.html,style.css}` |
 
-**UI tabs:** Bandeja · Tareas · Archivo · Papelera · Clientes · Adjuntos · Chat · Proceso · Ayuda · Ajustes.
+**UI tabs:** Bandeja · Tareas · Archivo · Papelera · Clientes · Adjuntos · **Mensajes** · Chat · Proceso · Ayuda · Ajustes.
 
 ---
 
@@ -249,6 +285,11 @@ All under `/api`, all loopback-only, all JSON unless noted.
 
 **Ingest/process** `POST /backfill` · `GET /process/stream` *(SSE)* · `GET /chats`
 
+**Mensajes** `GET /messages/chats` · `GET /messages` *(chatId, dir=older|newer|around,
+cursorTs+cursorId, q, unprocessed, withFiles)* · `GET /messages/search` ·
+`GET /messages/locate?id=` · `POST /messages/reanalyze` *(ids, vision)* ·
+`POST /messages/to-chat` *(ids → new thread)*. `POST /chat` also accepts `contextIds`.
+
 **Attachments** `GET /attachment?id=&i=[&download=1]` *(binary)* · `GET /attachments` ·
 `GET /attachments/locate?messageId=`
 
@@ -278,7 +319,7 @@ user-derived with `esc()`.
 in a template, or `<svg class="ico"><use href="#i-name"/></svg>` in markup.
 
 **Add or change a colour** → edit **both** `:root` and `:root[data-theme='dark']` in
-`style.css` (invariant 12). Then check it: sample the *composited* pixel rather than
+`style.css` (invariant 14). Then check it: sample the *composited* pixel rather than
 trusting the token, because most surfaces are translucent glass over an ambient wash —
 `getComputedStyle().backgroundColor` alone will lie to you. Recipe in §10.
 
@@ -336,7 +377,19 @@ starting the server, copy `public/` to a scratch directory and load a stub *befo
 Seed it with the awkward cases, not the happy ones: a **portrait** video and photo, a PDF,
 an unknown file type, and each unavailable state (`fetch` / `fda` / `missing`). Most of the
 1.6.1 bugs were invisible on landscape images. `ffmpeg -f lavfi -i testsrc=size=1080x1920…`
-generates the media.
+generates the media. Convert any `.heic` fixture with `sips` first — `/api/attachment`
+transcodes those before serving, so an un-converted one "fails to load" for a reason that
+doesn't exist in the app.
+
+**Two traps that produce convincing but false measurements:**
+
+- **Check `window.innerWidth` before trusting geometry.** A freshly opened or re-navigated
+  browser-pane tab can report a 0×0 viewport; everything then measures nonsense (bubbles
+  "collapsed to 26px", rows "700px tall"). Resize the viewport, then measure.
+- **Disable transitions before sampling colour.** `button:not(.tab)` transitions `color`, so
+  flipping `data-theme` animates and `getComputedStyle` hands back an interpolated
+  `oklab(...)`. Inject `*{transition:none!important;animation:none!important}` first. Without
+  it, a perfectly fine `--muted` label reads as 1.06:1.
 
 **Checking contrast.** Sample the composited pixel; don't reason about tokens. Walk up
 from the element compositing every translucent ancestor background, then run WCAG on the
@@ -363,6 +416,18 @@ to force it.
 ---
 
 ## 11. Recently fixed — do not regress
+
+**1.7.0**
+
+| Fix | Where |
+|---|---|
+| `enrichVision` described only the **first** attachment on a message — a client sending five product photos contributed one description at any budget, and the row was then marked processed, so the rest was lost for good | `extract/pipeline.ts` |
+| Nightly cron's vision cap of 20 spread across up to 6,000 messages; a busy night's photos went undescribed and unrecoverable | `server/index.ts` · §5 |
+| Sidebar rows collapsed 80px → 18px: buttons in a scrolling flex column, `overflow:hidden` killing `min-height:auto` | `style.css` · invariant 12 |
+| Jump-to-date loaded the right window but scrolled to the bottom of it, landing on a later day than the one requested | `app.js` `renderMsgThread` |
+| `#msg-visopt` was queried by id but the element only had the class — `renderMsgSelection` threw, breaking selection entirely | `index.html` |
+| Chips sharing a row with a 128px media tile were stretched to its height (`align-items` defaulting to `stretch`) | `style.css` |
+| `--faint` metadata missed AA on the bubble/sidebar glass stacks | `style.css` · invariant 13 |
 
 **1.6.1** (all in `public/`, all presentational)
 

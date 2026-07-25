@@ -156,7 +156,12 @@ function fileOnDisk(p: string | undefined): boolean {
 /**
  * Vision-enrich a batch of rows in place, up to `budget` describe-calls. Skips
  * stickers/Memoji. Returns how many calls it used. Mutates row.body to fold in
- * the description so the text extractor sees it.
+ * the descriptions so the text extractor sees them.
+ *
+ * Every qualifying attachment on a row is described, not just the first. A
+ * client sending five product photos in one message used to contribute exactly
+ * one description at any budget — the other four were never seen, and the row
+ * was then marked processed, so that signal was lost for good.
  */
 async function enrichVision(
   rows: Row[],
@@ -169,17 +174,25 @@ async function enrichVision(
     const mimes = r.attachment_mimes ? r.attachment_mimes.split('||') : [];
     const names = r.attachment_names ? r.attachment_names.split('||') : [];
     const paths = r.attachment_paths ? r.attachment_paths.split('||') : [];
-    const idx = mimes.findIndex(
-      (m, k) =>
-        (m.startsWith('image/') || m === 'application/pdf') &&
-        !(paths[k] ?? '').includes('/StickerCache/') &&
-        fileOnDisk(paths[k]),
-    );
-    if (idx === -1) continue;
-    const description = await describeAttachment(paths[idx]!, mimes[idx]!);
-    emit({ type: 'vision', messageId: r.id, attachmentIndex: idx, mime: mimes[idx]!, name: names[idx] ?? '', description });
-    r.body = `${r.body}\n(attachment contents: ${description})`;
-    used++;
+    const described: string[] = [];
+
+    for (let k = 0; k < mimes.length; k++) {
+      if (used >= budget) break;
+      const mime = mimes[k] ?? '';
+      const p = paths[k];
+      if (!(mime.startsWith('image/') || mime === 'application/pdf')) continue;
+      if ((p ?? '').includes('/StickerCache/')) continue;
+      if (!fileOnDisk(p)) continue;
+
+      const description = await describeAttachment(p!, mime);
+      emit({ type: 'vision', messageId: r.id, attachmentIndex: k, mime, name: names[k] ?? '', description });
+      // Label each file only when there are several, so the single-attachment
+      // case (the common one) keeps its original wording.
+      described.push(described.length || mimes.length > 1 ? `[${names[k] || `archivo ${k + 1}`}] ${description}` : description);
+      used++;
+    }
+
+    if (described.length) r.body = `${r.body}\n(attachment contents: ${described.join('\n')})`;
   }
   return used;
 }
@@ -328,4 +341,104 @@ export async function processNewMessages(opts: ProcessOptions = {}): Promise<{
   } finally {
     processingNow = false;
   }
+}
+
+/** Hard ceilings for a hand-picked selection (Mensajes tab → "Analizar"). The
+ *  message cap keeps one request inside the model's context; the file cap keeps
+ *  one click's vision cost predictable. */
+export const SELECTION_MAX_MESSAGES = 200;
+export const SELECTION_MAX_FILES = 40;
+
+export interface SelectionAnalysis {
+  messages: number;
+  filesAnalyzed: number;
+  proposed: ProposedTask[];
+  /** Open tasks already tied to this conversation — shown when nothing new was
+   *  proposed, so a zero result reads as "already covered" rather than "broken".
+   *  A relatedness heuristic (same source message or client), NOT the extractor's
+   *  actual dedup decision, which it doesn't report. */
+  related: { id: number; title: string; status: string }[];
+}
+
+/**
+ * Analyze an explicit, hand-picked set of messages and propose tasks from them.
+ *
+ * Unlike processNewMessages this is a PREVIEW run: it deliberately ignores the
+ * `processed` flag and never sets it, so re-checking a message doesn't quietly
+ * drain it from the normal pipeline queue and the same selection can be run
+ * again. Proposed tasks land in Bandeja like any other.
+ */
+export async function analyzeSelection(
+  ids: number[],
+  opts: { vision?: boolean; visionCap?: number } = {},
+): Promise<SelectionAnalysis> {
+  const picked = [...new Set(ids.filter((n) => Number.isFinite(n)))].slice(0, SELECTION_MAX_MESSAGES);
+  if (picked.length === 0) return { messages: 0, filesAnalyzed: 0, proposed: [], related: [] };
+
+  const d = db();
+  const placeholders = picked.map(() => '?').join(',');
+  const rows = d
+    .prepare(`SELECT ${ROW_COLS} FROM messages WHERE id IN (${placeholders}) ORDER BY ts ASC`)
+    .all(...picked) as Row[];
+  if (rows.length === 0) return { messages: 0, filesAnalyzed: 0, proposed: [], related: [] };
+
+  const cap = Math.min(Math.max(opts.visionCap ?? SELECTION_MAX_FILES, 0), SELECTION_MAX_FILES);
+  const filesAnalyzed = opts.vision === false ? 0 : await enrichVision(rows, cap, () => {});
+
+  const extractor = new ClaudeExtractor();
+  const proposed = await extractor.proposeTasks(toMessages(rows), loadClients(), loadOpenTasks());
+  saveTasks(proposed);
+
+  // Relatedness by the same handles/chats the selection came from.
+  const hints = [
+    ...new Set(
+      rows.flatMap((r) => [r.sender, r.chatName].filter((s): s is string => !!s && s !== 'me')),
+    ),
+  ];
+  const related =
+    hints.length === 0
+      ? []
+      : (d
+          .prepare(
+            `SELECT id, title, status FROM tasks
+             WHERE status IN ('proposed','todo','waiting')
+               AND archived_at IS NULL AND deleted_at IS NULL
+               AND (source_message_id IN (${placeholders})
+                    OR client_hint IN (${hints.map(() => '?').join(',')}))
+             ORDER BY updated_at DESC LIMIT 10`,
+          )
+          .all(...picked, ...hints) as { id: number; title: string; status: string }[]);
+
+  return { messages: rows.length, filesAnalyzed, proposed, related };
+}
+
+/** Render a selection as a plain-text transcript for the chat agent. Kept here
+ *  so the ordering and naming match what the extractor sees. */
+export function selectionTranscript(ids: number[], resolveName: (handle: string) => string): {
+  text: string;
+  count: number;
+  chatName: string;
+} {
+  const picked = [...new Set(ids.filter((n) => Number.isFinite(n)))].slice(0, SELECTION_MAX_MESSAGES);
+  if (picked.length === 0) return { text: '', count: 0, chatName: '' };
+  const rows = db()
+    .prepare(
+      `SELECT ${ROW_COLS} FROM messages WHERE id IN (${picked.map(() => '?').join(',')}) ORDER BY ts ASC`,
+    )
+    .all(...picked) as Row[];
+
+  const lines = rows.map((r) => {
+    const when = new Date(r.ts).toLocaleString('es', {
+      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
+    const who = r.direction === 'outgoing' ? 'Yo' : resolveName(r.sender ?? '') || r.senderName || r.sender || '?';
+    const files = r.attachment_names ? ` [archivos: ${r.attachment_names.split('||').filter(Boolean).join(', ')}]` : '';
+    return `[${when}] ${who}: ${r.body || '(sin texto)'}${files}`;
+  });
+
+  return {
+    text: lines.join('\n'),
+    count: rows.length,
+    chatName: rows.find((r) => r.chatName)?.chatName ?? '',
+  };
 }
