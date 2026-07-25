@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { db } from '../db/index.js';
 import { ClaudeExtractor } from './claude.js';
 import { describeAttachment } from './vision.js';
@@ -39,7 +42,7 @@ export type ActivityEvent =
       sourceQuote: string;
       sourceMessageId: number | null;
     }
-  | { type: 'done'; proposed: number };
+  | { type: 'done'; proposed: number; remaining?: number };
 
 interface Row {
   id: number;
@@ -136,6 +139,20 @@ function toMessages(rows: Row[]): IngestedMessage[] {
   }));
 }
 
+/** Is the stored attachment path a real file on this Mac right now? Dead temp
+ *  paths (/var/folders/… purged by macOS) and empty slots fail this, so they
+ *  don't consume a vision slot on a doomed describe call. */
+function fileOnDisk(p: string | undefined): boolean {
+  const t = (p ?? '').trim();
+  if (!t) return false;
+  const abs = t.startsWith('~') ? path.join(os.homedir(), t.slice(1)) : t;
+  try {
+    return fs.existsSync(abs);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Vision-enrich a batch of rows in place, up to `budget` describe-calls. Skips
  * stickers/Memoji. Returns how many calls it used. Mutates row.body to fold in
@@ -155,7 +172,8 @@ async function enrichVision(
     const idx = mimes.findIndex(
       (m, k) =>
         (m.startsWith('image/') || m === 'application/pdf') &&
-        !(paths[k] ?? '').includes('/StickerCache/'),
+        !(paths[k] ?? '').includes('/StickerCache/') &&
+        fileOnDisk(paths[k]),
     );
     if (idx === -1) continue;
     const description = await describeAttachment(paths[idx]!, mimes[idx]!);
@@ -225,9 +243,13 @@ export interface ProcessOptions {
 let processingNow = false;
 
 /**
- * Continuous engine: process UNPROCESSED messages in batches, deduping against
- * open tasks, marking each batch processed. Bounded by maxBatches per call so a
- * huge backfill is chewed through incrementally rather than in one giant request.
+ * Continuous engine: process UNPROCESSED messages in batches — NEWEST FIRST, so
+ * today's messages are analyzed on the very next run even when a history import
+ * just queued thousands of old ones (oldest-first buried recent messages behind
+ * the backlog, and tasks from them never appeared). Each batch is fed to the
+ * extractor in chronological order. Dedupes against open tasks, marks each batch
+ * processed. Bounded by maxBatches per call so a huge backfill is chewed through
+ * incrementally rather than in one giant request.
  */
 export async function processNewMessages(opts: ProcessOptions = {}): Promise<{
   processed: number;
@@ -246,8 +268,9 @@ export async function processNewMessages(opts: ProcessOptions = {}): Promise<{
 
   // Bail out (rather than double-process) if another run is already in flight.
   if (processingNow) {
-    emit({ type: 'done', proposed: 0 });
-    return { processed: 0, proposed: 0, remaining: countUnprocessed() };
+    const remaining = countUnprocessed();
+    emit({ type: 'done', proposed: 0, remaining });
+    return { processed: 0, proposed: 0, remaining };
   }
   processingNow = true;
   try {
@@ -256,7 +279,7 @@ export async function processNewMessages(opts: ProcessOptions = {}): Promise<{
 
     const extractor = new ClaudeExtractor();
     const selectBatch = d.prepare(
-      `SELECT ${ROW_COLS} FROM messages WHERE processed = 0 ORDER BY ts ASC LIMIT ?`,
+      `SELECT ${ROW_COLS} FROM messages WHERE processed = 0 ORDER BY ts DESC LIMIT ?`,
     );
     const markProcessed = d.prepare('UPDATE messages SET processed = 1 WHERE id = ?');
 
@@ -266,6 +289,9 @@ export async function processNewMessages(opts: ProcessOptions = {}): Promise<{
     for (let b = 0; b < maxBatches; b++) {
       const rows = selectBatch.all(batchSize) as Row[];
       if (rows.length === 0) break;
+      // The batch is selected newest-first; present it to the extractor (and
+      // the live feed) oldest-first so the transcript reads chronologically.
+      rows.reverse();
 
       // Stream each message so the Pipeline tab's "Messages sifted" fills live.
       for (const r of rows) emit(messageEvent(r));
@@ -296,8 +322,9 @@ export async function processNewMessages(opts: ProcessOptions = {}): Promise<{
       emit({ type: 'batch', processed, total, proposed });
     }
 
-    emit({ type: 'done', proposed });
-    return { processed, proposed, remaining: countUnprocessed() };
+    const remaining = countUnprocessed();
+    emit({ type: 'done', proposed, remaining });
+    return { processed, proposed, remaining };
   } finally {
     processingNow = false;
   }

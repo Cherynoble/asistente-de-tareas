@@ -547,7 +547,12 @@ function startStream(url, statusEl, onDone) {
     else if (e.type === 'batch') statusEl.textContent = `procesados ${e.processed}/${e.total} · ${e.proposed} propuestas…`;
     else if (e.type === 'done') {
       if (!counters.tasks) $('#task-feed').append(el('<div class="empty">No se encontraron tareas.</div>'));
-      finish(`listo — ${e.proposed} tarea(s) propuesta(s)`);
+      // The engine processes the NEWEST messages first and is bounded per run —
+      // tell the user when older imported history is still queued.
+      const left = e.remaining > 0
+        ? ` · quedan ${e.remaining} mensajes antiguos en cola — pulsa de nuevo para continuar`
+        : '';
+      finish(`listo — ${e.proposed} tarea(s) propuesta(s)${left}`);
     } else handleEvent(e);
   };
   es.addEventListener('failed', (ev) => finish('error: ' + JSON.parse(ev.data).message));
