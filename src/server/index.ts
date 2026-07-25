@@ -76,7 +76,70 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
 const NATIVE_IMAGE = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
+/** Fallback mime by extension for attachments chat.db stored without one. */
+const MIME_BY_EXT: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.heic': 'image/heic',
+  '.tiff': 'image/tiff',
+  '.pdf': 'application/pdf',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.m4a': 'audio/mp4',
+  '.mp3': 'audio/mpeg',
+  '.caf': 'audio/x-caf',
+};
+
 const app = express();
+
+/**
+ * The dashboard has no authentication — it holds the owner's entire message
+ * history and can spend API credits — so requests must only ever come from the
+ * app's own window (or a browser on this Mac). Three layers, all cheap:
+ *  1. The server binds to loopback (see app.listen), so nothing on the LAN can
+ *     reach it directly.
+ *  2. Host-header allowlist: a malicious website can't use DNS rebinding to
+ *     read responses through a hostname it controls that resolves to 127.0.0.1.
+ *  3. Cross-site request rejection: browsers label requests from other origins
+ *     (Sec-Fetch-Site / Origin), so a web page can't trigger state changes or
+ *     paid processing via <img>/form/fetch aimed at localhost.
+ */
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+function hostAllowed(host: string | undefined): boolean {
+  if (!host) return false;
+  const bare = host.replace(/:\d+$/, '');
+  return LOCAL_HOSTS.has(bare);
+}
+app.use('/api', (req, res, next) => {
+  if (!hostAllowed(req.headers.host)) {
+    res.status(403).json({ error: 'forbidden host' });
+    return;
+  }
+  const site = req.headers['sec-fetch-site'];
+  if (site === 'cross-site') {
+    res.status(403).json({ error: 'cross-site request rejected' });
+    return;
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    const origin = req.headers.origin;
+    if (origin && origin !== 'null') {
+      try {
+        if (!hostAllowed(new URL(origin).host)) {
+          res.status(403).json({ error: 'cross-origin request rejected' });
+          return;
+        }
+      } catch {
+        res.status(403).json({ error: 'bad origin' });
+        return;
+      }
+    }
+  }
+  next();
+});
+
 app.use(express.json({ limit: '30mb' })); // base64 image/PDF uploads in chat
 app.use(express.static(PUBLIC_DIR));
 
@@ -866,7 +929,7 @@ app.get('/api/attachment', async (req, res) => {
       mime = dl.mime;
     }
   }
-  if (!filePath || !mime) {
+  if (!filePath || !filePath.trim()) {
     res.status(404).end();
     return;
   }
@@ -875,6 +938,9 @@ app.get('/api/attachment', async (req, res) => {
     res.status(404).end();
     return;
   }
+  // chat.db can store an attachment with a NULL mime_type; fall back to the
+  // file extension so a real on-disk file is still previewable/downloadable.
+  if (!mime) mime = MIME_BY_EXT[path.extname(abs).toLowerCase()] ?? '';
   // Download-a-copy: any file type, forced as an attachment with a tidy name.
   if (req.query.download === '1') {
     const rawName = (row.attachment_names || '').split('||')[i] || '';
@@ -1178,11 +1244,17 @@ function applySchedule(): void {
       ingestSafely();
       const r = await processNewMessages({ vision: true, visionCap: 20, maxBatches: 50 });
       console.log(`[cron] processed ${r.processed}, proposed ${r.proposed}, remaining ${r.remaining}`);
-      // Morning digest right after the day's messages are processed.
+    } catch (err) {
+      console.error('[cron] ingest/process failed:', err instanceof Error ? err.message : err);
+    }
+    // The morning digest only needs the local DB — send it even when the AI
+    // pass above failed (API/network down), so a bad morning still gets its
+    // summary instead of silent nothing.
+    try {
       const d = sendDailyDigest();
       console.log(`[cron] digest: ${d.counts.total} open (${d.counts.overdue} overdue)`);
     } catch (err) {
-      console.error('[cron] failed:', err instanceof Error ? err.message : err);
+      console.error('[cron] digest failed:', err instanceof Error ? err.message : err);
     }
   });
   console.log(`  Daily auto-process scheduled: "${expr}"`);
@@ -1231,7 +1303,11 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
 }
 
 const PORT = Number(process.env.PORT ?? 4319);
-app.listen(PORT, () => {
+// Loopback only: the dashboard has no auth, so it must not be reachable from
+// the LAN. Set HOST explicitly (e.g. 0.0.0.0) only if remote access is ever
+// wanted on purpose — and add auth first.
+const HOST = process.env.HOST ?? '127.0.0.1';
+app.listen(PORT, HOST, () => {
   console.log(`\n  Dad's App dashboard → http://localhost:${PORT}\n`);
   logStartupDiagnostics(); // which DB this process bound to — see Ajustes → Diagnóstico
   try {

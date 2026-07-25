@@ -94,6 +94,26 @@ async function checkForUpdate() {
   }
 }
 
+/**
+ * Only install zips that are release assets of OUR repo. applyUpdate is reachable
+ * from the renderer over IPC, so without this check a compromised page could
+ * point the updater at an arbitrary zip and get its code run on next launch.
+ * (GitHub redirects asset downloads to objects.githubusercontent.com; fetch
+ * follows that redirect internally, so validating the initial URL is enough.)
+ */
+function isAllowedZipUrl(u) {
+  try {
+    const url = new URL(String(u));
+    return (
+      url.protocol === 'https:' &&
+      url.hostname === 'github.com' &&
+      url.pathname.startsWith(`/${REPO}/releases/download/`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function ditto(zipPath, destDir) {
   return new Promise((resolve, reject) => {
     execFile('/usr/bin/ditto', ['-x', '-k', zipPath, destDir], (err) =>
@@ -122,6 +142,7 @@ function swapIn(stagedDir, name) {
  */
 async function applyUpdate(zipUrl) {
   if (!app.isPackaged) return { ok: false, message: 'Las actualizaciones solo se aplican en la app instalada.' };
+  if (!isAllowedZipUrl(zipUrl)) return { ok: false, message: 'URL de actualización no permitida.' };
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dadsapp-update-'));
   try {
     const zipPath = path.join(tmp, 'app-bundle.zip');
