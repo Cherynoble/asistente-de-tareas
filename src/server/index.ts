@@ -40,6 +40,7 @@ import {
 } from '../chat/store.js';
 import { nameMap } from '../names.js';
 import { purgeStickers } from '../maintenance.js';
+import { computeDiagnostics, logStartupDiagnostics } from '../diagnostics.js';
 import { autoClassifyClients } from '../clients/classify.js';
 import { resolveContactName } from '../ingest/contacts.js';
 import { describeAttachment } from '../extract/vision.js';
@@ -771,6 +772,13 @@ app.get('/api/stats', (_req, res) => {
   });
 });
 
+/** Which DB file this process is actually reading/writing, for diagnosing a
+ * dataDir mismatch (config.ts prefers ./data/app.db over Application Support
+ * if a stray copy exists) — surfaced in Ajustes → Diagnóstico. */
+app.get('/api/diagnostics', (_req, res) => {
+  res.json(computeDiagnostics());
+});
+
 app.post('/api/tasks/:id/status', (req, res) => {
   const status = (req.body as { status?: string }).status ?? '';
   const allowed = ['proposed', 'todo', 'waiting', 'done', 'dismissed'];
@@ -1225,6 +1233,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
 const PORT = Number(process.env.PORT ?? 4319);
 app.listen(PORT, () => {
   console.log(`\n  Dad's App dashboard → http://localhost:${PORT}\n`);
+  logStartupDiagnostics(); // which DB this process bound to — see Ajustes → Diagnóstico
   try {
     purgeStickers(); // scrub any previously-captured stickers (idempotent)
   } catch (err) {

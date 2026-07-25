@@ -1420,8 +1420,45 @@ async function loadSettings() {
   $('#rem-on').checked = s.remindersEnabled;
   $('#rem-interval').value = s.nudgeIntervalDays || 2;
   loadReminderPreview();
+  loadDiagnostics();
   initUpdates();
 }
+
+// ---- Diagnostics: which DB this running instance is actually bound to ----
+let lastDiagText = '';
+async function loadDiagnostics() {
+  const box = $('#diag-body');
+  try {
+    const d = await (await fetch('/api/diagnostics')).json();
+    const src = d.sources.length
+      ? d.sources
+          .map((s) => `${s.source}: ${s.count} (último ${s.lastAt ? fmtMsgTime(s.lastAt) : '—'})`)
+          .join(' · ')
+      : 'sin mensajes';
+    const unproc = d.unprocessed.count
+      ? `${d.unprocessed.count} sin procesar (el más antiguo: ${fmtMsgTime(d.unprocessed.oldestAt)})`
+      : 'todo procesado';
+    box.innerHTML =
+      `<div><b>Base de datos:</b> ${esc(d.dbPath)}</div>` +
+      `<div><b>Mensajes:</b> ${esc(src)}</div>` +
+      `<div><b>Cola de proceso:</b> ${esc(unproc)}</div>`;
+    lastDiagText = `dataDir: ${d.dataDir}\ndbPath: ${d.dbPath}\nmensajes: ${src}\ncola: ${unproc}`;
+  } catch {
+    box.textContent = 'No se pudo cargar el diagnóstico.';
+    lastDiagText = '';
+  }
+}
+
+$('#diag-copy').addEventListener('click', async () => {
+  if (!lastDiagText) return;
+  try {
+    await navigator.clipboard.writeText(lastDiagText);
+    $('#diag-copied').textContent = 'Copiado ✓';
+    setTimeout(() => ($('#diag-copied').textContent = ''), 2000);
+  } catch {
+    $('#diag-copied').textContent = 'No se pudo copiar.';
+  }
+});
 
 // ---- Updates (only available inside the Electron app via the preload bridge) ----
 let updatesWired = false;

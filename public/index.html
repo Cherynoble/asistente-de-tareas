@@ -268,6 +268,16 @@
 
       <!-- AJUSTES -->
       <section id="settings" class="panel">
+        <div class="setblock" id="diag-block">
+          <h3>Diagnóstico</h3>
+          <p class="hint">De qué base de datos está leyendo/escribiendo esta instancia ahora mismo — útil si algo parece "no actualizarse" (mensajes o tareas que no aparecen).</p>
+          <div id="diag-body" class="hint">Cargando…</div>
+          <div class="setrow">
+            <button id="diag-copy">Copiar diagnóstico</button>
+            <span id="diag-copied" class="saved"></span>
+          </div>
+        </div>
+
         <div class="setblock" id="update-block" style="display:none">
           <h3>Actualizaciones <span id="upd-badge" class="badge" style="display:none">nueva</span></h3>
           <p class="hint" id="upd-status">Versión actual: …</p>
