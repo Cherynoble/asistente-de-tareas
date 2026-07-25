@@ -1,6 +1,6 @@
 # Dad's App — Project State & Contributor Guide
 
-**Snapshot: version 1.5.4 (released 2026-07-25).** This is the "how it actually works
+**Snapshot: version 1.6.1 (released 2026-07-25).** This is the "how it actually works
 and how to change it safely" document. The other two docs cover different questions:
 
 | Doc | Answers |
@@ -18,7 +18,9 @@ It mirrors his **iMessage** (read-only from `chat.db`) and **WhatsApp** (read-on
 Web mirror) into one local SQLite DB, runs them through **Claude Haiku** to propose
 follow-up tasks he'd otherwise forget, and nags him until they're done. Everything is
 local: no server, no accounts, no telemetry. The UI is a Spanish-language local web app
-served by an in-process Express server at `localhost:4319`.
+served by an in-process Express server at `localhost:4319` — vanilla HTML/CSS/JS, no
+bundler and no framework, styled as a translucent "liquid glass" surface with light and
+dark themes (§6a).
 
 ---
 
@@ -80,6 +82,11 @@ one list would otherwise shift it and mis-pair files (fixed in 1.5.3).
 `reminders_enabled`, `nudge_interval_days`, `selected_chats`, `last_digest_seen`,
 `wa_accounts`, and per-account `wa_selected_chats:<id>`, `wa_identity:<id>`, `wa_label:<id>`.
 
+**Not in the DB:** the appearance preference (Ajustes → Apariencia) lives in
+`localStorage` under `theme` (`auto` | `light` | `dark`). It is a display preference for
+this machine, so it deliberately never touches the settings table or the server — which
+is also why adding it needed no schema change and shipped as a normal code update.
+
 ---
 
 ## 4. Load-bearing invariants (break these and something silently rots)
@@ -105,6 +112,22 @@ one list would otherwise shift it and mis-pair files (fixed in 1.5.3).
    A contact's message text reaching `innerHTML` unescaped is a stored-XSS bug.
 9. **`noUncheckedIndexedAccess` is on.** `arr[i] && arr[i].trim()` doesn't narrow —
    bind to a local first.
+10. **`button:not(.tab)` is specificity (0,1,1) and sets `position: relative`** (it
+    anchors the hover sweep). A bare `.my-button { position: absolute }` at (0,1,0)
+    **loses** to it and silently stays in flow. Any absolutely-positioned button needs a
+    selector that beats (0,1,1) — e.g. `.att-media .att-expand`. This exact trap shipped
+    in 1.6.0 and broke the Adjuntos grid.
+11. **A fixed-size thumbnail must not be a flex child.** Replaced elements (`<img>`,
+    `<video>`) inside a flex container get re-sized from their own intrinsic aspect ratio
+    against the container's definite height, so `width: 100%` does *not* mean "fill" —
+    portrait media ends up in a narrow strip. Position them `absolute; inset: 0` and let
+    `object-fit` crop. (Where aspect ratio *should* be preserved — the lightbox, the
+    Proceso thumbnails — flex children are correct and intentional.)
+12. **The theme is always stamped explicitly.** An inline resolver in `index.html`'s
+    `<head>` writes `<html data-theme="light|dark">` before first paint (no flash) and
+    re-resolves on OS change when the preference is `auto`. `style.css` therefore has
+    **no `prefers-color-scheme` query for tokens**: light lives in `:root`, dark in
+    `:root[data-theme='dark']`. Adding a token means adding it to both.
 
 ---
 
@@ -150,9 +173,53 @@ deselected will still be analyzed while they remain unprocessed.
 | Settings + WA account registry | `src/settings.ts` |
 | Diagnostics (DB binding, startup log) | `src/diagnostics.ts` |
 | Electron shell / updater | `electron/{main,updater,preload}.cjs` |
-| Frontend (no bundler, no framework) | `public/{app.js,index.html,style.css}` |
+| Frontend (no bundler, no framework) — see §6a | `public/{app.js,index.html,style.css}` |
 
 **UI tabs:** Bandeja · Tareas · Archivo · Papelera · Clientes · Adjuntos · Chat · Proceso · Ayuda · Ajustes.
+
+---
+
+## 6a. The frontend, in more detail
+
+No bundler, no framework, no npm packages in the browser. Three files:
+
+| File | Holds |
+|---|---|
+| `public/style.css` | The whole design system. Tokens first (colour, type, space, radius, motion, z-scale), then components in the order the UI uses them, then keyframes, responsive, reduced-motion. |
+| `public/index.html` | The theme resolver (inline, in `<head>`), the SVG icon sprite, the static shell of all ten panels. |
+| `public/app.js` | All behaviour, plus the HTML template strings that render every list, card and overlay. |
+
+**Colour.** OKLCH throughout. The accent is a deep marine teal, picked because blue,
+green, amber and red already carry meaning here (iMessage badge, WhatsApp badge, "en
+espera", destructive/overdue) — an accent in any of those hues would collide. Both
+gradient stops of `.primary` have to clear 4.5:1 against `--accent-ink`, which is why
+`--accent-hi` is a lift in chroma more than in lightness.
+
+**Type.** System stack (SF Pro on his Mac), fixed rem-ish scale, `tabular-nums`
+everywhere numbers line up. Deliberately **no web fonts** — the app is fully offline and
+local, and a Google Fonts request would add a network dependency that doesn't exist today.
+
+**Icons.** One inline SVG sprite in `index.html` (`<symbol id="i-…">`), used as
+`ico('name')` from `app.js` or `<svg class="ico"><use href="#i-…"/></svg>` in markup.
+One stroke weight, coloured by `currentColor`. **Don't reintroduce emoji as structural
+icons** — they were the single cheapest-looking thing in the pre-1.6 UI. Emoji is fine in
+prose and notification text.
+
+**Two components are ours because the native ones can't be themed:**
+- **Date picker** (`.dp`, `openDatePicker` in `app.js`). Chromium's calendar panel is
+  browser chrome and takes no CSS, so it is suppressed
+  (`::-webkit-calendar-picker-indicator { display: none }` plus swallowing F4 / Space /
+  Alt-Down) and replaced. It stays presentational: it writes the same `YYYY-MM-DD` into
+  the same `<input type="date">` and fires the same `change` event, so every handler is
+  untouched, and typing into the field still works. It renders into `<body>` with
+  `position: fixed` so it escapes scrolling panels, and flips above the field when there
+  is no room below.
+- **Audio tiles.** Chromium drops the `<audio>` timeline below ~200px, so a 160px gallery
+  tile can never show a scrubber or duration. The tile is an affordance; the Quick-Look
+  overlay does playback (it already autoplayed).
+
+The `<input type="time">` in Ajustes still uses the native picker — it's a small dropdown
+rather than a full panel, so it was left alone.
 
 ---
 
@@ -206,6 +273,22 @@ the `SYSTEM` prompt's tool list. The loop caps at 5 turns.
 in `index.html`, then a loader in the tab-switch handler in `app.js`. Escape everything
 user-derived with `esc()`.
 
+**Add an icon** → a `<symbol id="i-name" viewBox="0 0 24 24">` in the sprite at the top of
+`index.html`, paths only (stroke/fill/width are inherited from `.ico`). Then `ico('name')`
+in a template, or `<svg class="ico"><use href="#i-name"/></svg>` in markup.
+
+**Add or change a colour** → edit **both** `:root` and `:root[data-theme='dark']` in
+`style.css` (invariant 12). Then check it: sample the *composited* pixel rather than
+trusting the token, because most surfaces are translucent glass over an ambient wash —
+`getComputedStyle().backgroundColor` alone will lie to you. Recipe in §10.
+
+**Position a button absolutely** → give the rule a selector that beats (0,1,1)
+(invariant 10). A bare class will not work.
+
+**Restyle a native control** → check first whether it's actually stylable. Form *fields*
+are; the popups they summon (calendar, clock, `<select>` menu, media controls) are browser
+chrome and take no CSS. Suppress and replace, or leave alone — don't ship a half-styled one.
+
 **Add a setting** → read/write via `getSetting`/`setSetting`, expose it in
 `GET/POST /api/settings`, wire the control in the Ajustes panel.
 
@@ -238,6 +321,31 @@ Static frontend changes can be verified by opening `public/index.html` directly 
 browser (no server, no WhatsApp). Read-only SQL against the real DB is safe with
 `sqlite3 -readonly`.
 
+**Verifying UI work properly — the offline harness.** Opening `index.html` raw gets you an
+empty shell, because every view renders from `/api`. To exercise the real views without
+starting the server, copy `public/` to a scratch directory and load a stub *before*
+`app.js` that:
+
+1. replaces `window.fetch` with a lookup table of canned `/api` responses;
+2. stubs `EventSource` (the Proceso SSE stream) and `confirm`;
+3. rewrites `/api/attachment?id=…` URLs onto real local files. Do this by patching the
+   `innerHTML` setter on `HTMLTemplateElement.prototype` — `el()` builds every node
+   through a `<template>`, whose content is **inert**, so nothing ever tries to load the
+   fake URL first.
+
+Seed it with the awkward cases, not the happy ones: a **portrait** video and photo, a PDF,
+an unknown file type, and each unavailable state (`fetch` / `fda` / `missing`). Most of the
+1.6.1 bugs were invisible on landscape images. `ffmpeg -f lavfi -i testsrc=size=1080x1920…`
+generates the media.
+
+**Checking contrast.** Sample the composited pixel; don't reason about tokens. Walk up
+from the element compositing every translucent ancestor background, then run WCAG on the
+result. Feed colours through a 1×1 canvas (`fillStyle` + `getImageData`) to resolve them —
+`getComputedStyle().color` returns raw `oklch(...)` that a naive regex will misread. Check
+**both** themes; they fail independently.
+
+Delete the harness when done — it must not end up in the repo or in a release bundle.
+
 **Ship a code update** (JS/HTML/CSS — the normal path):
 
 1. Bump `version` in `package.json`.
@@ -254,7 +362,23 @@ to force it.
 
 ---
 
-## 11. Recently fixed — do not regress (1.5.3)
+## 11. Recently fixed — do not regress
+
+**1.6.1** (all in `public/`, all presentational)
+
+| Fix | Where |
+|---|---|
+| `button:not(.tab)`'s `position: relative` outranked `.att-expand`'s `absolute` → the button stayed in the flex flow, centred itself in the tile and stole 28px, squeezing every placeholder 160px → 132px (regression from 1.6.0) | `style.css` · invariant 10 |
+| Thumbnails as flex children were re-sized from their intrinsic aspect ratio → portrait video/photos rendered in a narrow strip (pre-existing, predates the redesign) | `style.css` · invariant 11 |
+| `<audio>` in a 160px tile has no scrubber and no duration (Chromium collapses it) → tile is now an affordance, overlay plays | `app.js` `attMediaHtml` |
+| PDF / audio / generic file tiles had no surface of their own and read as failed tiles; generic label said "archivo", repeating the filename below it | `style.css`, `app.js` `attExt` |
+
+**1.6.0** — full visual redesign: OKLCH token system, light + dark, SVG icon sprite
+replacing emoji, custom date picker, Apariencia setting. Contrast was raised across the
+board to clear AA in both themes; **don't lighten `--muted` / `--faint` or the status
+colours** without re-sampling (§10).
+
+**1.5.3**
 
 | Fix | Where |
 |---|---|
@@ -272,6 +396,15 @@ to force it.
 ## 12. Open items / candidate next work
 
 - **Not yet shipped to Dad:** the updater URL allowlist (needs a new `.app`).
+- **Voice notes now play in the preview overlay, not in the gallery tile** (§6a). If that
+  turns out to be annoying in daily use, the alternative is letting audio cards span two
+  grid columns so the native player has the ~200px it needs.
+- **The appearance preference is per-machine** (`localStorage`, not the DB), so it does
+  not follow him to another Mac. Fine for a single-machine app; revisit only if that
+  changes.
+- **No automated coverage of the UI.** The offline harness in §10 is rebuilt by hand each
+  time; the geometry assertions it produces (tile fills its slot, corner controls land at
+  the corner, contrast ≥ 4.5:1 in both themes) are the obvious thing to make permanent.
 - **Processing ignores chat selection** for already-imported messages (§5).
 - **No automated tests.** `tsc` + `node --check` + manual is the whole safety net;
   the pipeline and reminder logic are the obvious first candidates for unit tests.
