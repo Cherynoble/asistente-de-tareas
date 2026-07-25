@@ -3,27 +3,104 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="Seguimiento de pedidos y tareas a partir de tus mensajes de WhatsApp e iMessage." />
     <title>Asistente de Tareas</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23127f8c'/%3E%3Cpath d='M9 16.5l4.6 4.5L23 11.5' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
+    />
     <link rel="stylesheet" href="/style.css" />
+    <script>
+      // Resolve the appearance before first paint so there is never a flash of
+      // the wrong theme. Preference lives in localStorage: 'auto' | 'light' |
+      // 'dark'. 'auto' follows the macOS setting and re-resolves if it changes
+      // while the app is open. Purely a display preference — nothing here
+      // touches the database or the server.
+      (function () {
+        var KEY = 'theme';
+        var mq = window.matchMedia('(prefers-color-scheme: dark)');
+        function apply() {
+          var pref;
+          try { pref = localStorage.getItem(KEY) || 'auto'; } catch (e) { pref = 'auto'; }
+          var mode = pref === 'auto' ? (mq.matches ? 'dark' : 'light') : pref;
+          document.documentElement.setAttribute('data-theme', mode);
+        }
+        apply();
+        mq.addEventListener('change', apply);
+        window.applyTheme = apply;
+      })();
+    </script>
   </head>
   <body>
-    <header>
-      <h1>Asistente de Tareas <span class="sub">seguimiento de pedidos</span></h1>
-      <div id="stats" class="stats"></div>
-    </header>
+    <!-- Icon system: one stroke weight, one visual language, coloured by
+         `currentColor`. Referenced everywhere as <svg class="ico"><use href="#i-…"/></svg>. -->
+    <svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+      <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3 13h4l2 3h6l2-3h4"/><path d="M5.5 5h13l2.5 8v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4z"/></symbol>
+      <symbol id="i-tasks" viewBox="0 0 24 24"><path d="M4 6.5l1.8 1.8L9 5"/><path d="M4 12.5l1.8 1.8L9 11"/><path d="M4 18.5l1.8 1.8L9 17"/><path d="M12 7h8M12 13h8M12 19h5"/></symbol>
+      <symbol id="i-archive" viewBox="0 0 24 24"><path d="M3 7h18v3H3z"/><path d="M4.5 10v8.5a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V10"/><path d="M10 14h4"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7"/><path d="M6.5 7l.9 12.1a1.6 1.6 0 0 0 1.6 1.4h6a1.6 1.6 0 0 0 1.6-1.4L17.5 7"/><path d="M10.5 11v6M13.5 11v6"/></symbol>
+      <symbol id="i-clients" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 5.6a3.2 3.2 0 0 1 0 5.9"/><path d="M17.5 14.4A5.6 5.6 0 0 1 21 20"/></symbol>
+      <symbol id="i-clip" viewBox="0 0 24 24"><path d="M19.4 11.3l-7.9 7.9a4.4 4.4 0 0 1-6.2-6.2l8.3-8.3a2.9 2.9 0 0 1 4.1 4.1l-8.2 8.2a1.4 1.4 0 0 1-2-2l7.5-7.5"/></symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20.5 12.2c0 4.1-3.8 7.4-8.5 7.4a9.8 9.8 0 0 1-2.6-.35L4.2 20.7l1.1-3.6A7 7 0 0 1 3.5 12.2c0-4.1 3.8-7.4 8.5-7.4s8.5 3.3 8.5 7.4z"/><path d="M8.8 12h.01M12 12h.01M15.2 12h.01"/></symbol>
+      <symbol id="i-process" viewBox="0 0 24 24"><path d="M3 12h3.4l2.1-5.4 3.2 11 2.6-7 1.6 3.4H21"/><circle cx="12" cy="12" r="9.2" opacity=".28"/></symbol>
+      <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.7"/><path d="M9.6 9.4a2.5 2.5 0 0 1 4.8.8c0 1.7-2.4 2-2.4 3.6"/><path d="M12 17.1h.01"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M4.8 12.6l4.6 4.6L19.2 7.4"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H9"/><path d="M8 4.5L3.5 9 8 13.5"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.6"/><path d="M20 20l-4.3-4.3"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.6 10.8L12 15.2l4.4-4.4"/><path d="M5 19.4h14"/></symbol>
+      <symbol id="i-expand" viewBox="0 0 24 24"><path d="M9.6 4H4v5.6"/><path d="M14.4 20H20v-5.6"/><path d="M4 4l6.4 6.4"/><path d="M20 20l-6.4-6.4"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.4 6.4l11.2 11.2M17.6 6.4L6.4 17.6"/></symbol>
+      <symbol id="i-left" viewBox="0 0 24 24"><path d="M14.5 5.5L8 12l6.5 6.5"/></symbol>
+      <symbol id="i-right" viewBox="0 0 24 24"><path d="M9.5 5.5L16 12l-6.5 6.5"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.7"/><path d="M12 7.2V12l3.2 2"/></symbol>
+      <symbol id="i-memory" viewBox="0 0 24 24"><rect x="7.5" y="7.5" width="9" height="9" rx="2.2"/><path d="M10 4v3.5M14 4v3.5M10 16.5V20M14 16.5V20M4 10h3.5M4 14h3.5M16.5 10H20M16.5 14H20"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4L17 7M7 17l-1.6 1.6"/></symbol>
+      <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.4l1.9 4.9 4.9 1.9-4.9 1.9L12 17l-1.9-4.9L5.2 10.2l4.9-1.9z"/><path d="M18.6 15.4l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.2v13.6M5.2 12h13.6"/></symbol>
+      <symbol id="i-new" viewBox="0 0 24 24"><path d="M6 3.5v5M3.5 6h5"/><path d="M15.5 12.5l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" opacity="0"/><path d="M13.4 6.4l2.1 5.1 5.1 2.1-5.1 2.1-2.1 5.1-2.1-5.1-5.1-2.1 5.1-2.1z"/></symbol>
+      <symbol id="i-pdf" viewBox="0 0 24 24"><path d="M13.6 3.5H7.2a1.7 1.7 0 0 0-1.7 1.7v13.6a1.7 1.7 0 0 0 1.7 1.7h9.6a1.7 1.7 0 0 0 1.7-1.7V8.3z"/><path d="M13.6 3.5v4.8h4.9"/><path d="M8.8 15.5h6.4M8.8 12.3h3.2"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M13.6 3.5H7.2a1.7 1.7 0 0 0-1.7 1.7v13.6a1.7 1.7 0 0 0 1.7 1.7h9.6a1.7 1.7 0 0 0 1.7-1.7V8.3z"/><path d="M13.6 3.5v4.8h4.9"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.8" y="10.4" width="14.4" height="9.4" rx="2.2"/><path d="M8.4 10.4V7.8a3.6 3.6 0 0 1 7.2 0v2.6"/></symbol>
+      <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4.2l8.6 15H3.4z"/><path d="M12 9.6v4M12 16.6h.01"/></symbol>
+      <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.7"/><path d="M5.9 5.9l12.2 12.2"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4.4V9h-4.6"/></symbol>
+      <symbol id="i-diag" viewBox="0 0 24 24"><ellipse cx="12" cy="6.2" rx="7.4" ry="2.8"/><path d="M4.6 6.2v11.6c0 1.5 3.3 2.8 7.4 2.8s7.4-1.3 7.4-2.8V6.2"/><path d="M4.6 12c0 1.5 3.3 2.8 7.4 2.8s7.4-1.3 7.4-2.8"/></symbol>
+      <symbol id="i-update" viewBox="0 0 24 24"><path d="M12 15.6V4.4"/><path d="M7.8 11.4L12 15.6l4.2-4.2"/><path d="M4.6 15.4v2.4a2 2 0 0 0 2 2h10.8a2 2 0 0 0 2-2v-2.4"/></symbol>
+      <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6.4" y="2.8" width="11.2" height="18.4" rx="2.6"/><path d="M10.6 5.6h2.8"/><path d="M12 18.1h.01"/></symbol>
+      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8.2" cy="15.8" r="3.8"/><path d="M11 13l8-8"/><path d="M16.4 7.6l2 2M18.6 5.4l2 2"/></symbol>
+      <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3.6" y="5.4" width="16.8" height="15" rx="2.4"/><path d="M3.6 10h16.8M8.4 3.4v3.6M15.6 3.4v3.6"/><path d="M12 13.4v2.6l1.8 1.1"/></symbol>
+      <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6.4 10.2a5.6 5.6 0 0 1 11.2 0c0 4.2 1.4 5.6 1.4 5.6H5s1.4-1.4 1.4-5.6z"/><path d="M10.3 19a2 2 0 0 0 3.4 0"/></symbol>
+      <symbol id="i-message" viewBox="0 0 24 24"><path d="M20.4 15.2a2.2 2.2 0 0 1-2.2 2.2H8l-4.4 3.4V5.4a2.2 2.2 0 0 1 2.2-2.2h12.4a2.2 2.2 0 0 1 2.2 2.2z"/></symbol>
+      <symbol id="i-import" viewBox="0 0 24 24"><path d="M12 3.6v10.8"/><path d="M8 10.4l4 4 4-4"/><path d="M4.4 16.4v2a2 2 0 0 0 2 2h11.2a2 2 0 0 0 2-2v-2"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.4 14.6A8.8 8.8 0 0 1 9.4 3.6a8.9 8.9 0 1 0 11 11z"/></symbol>
+      <symbol id="i-auto" viewBox="0 0 24 24"><rect x="3.2" y="4.4" width="17.6" height="12.4" rx="2.4"/><path d="M8.6 20.4h6.8M12 16.8v3.6"/></symbol>
+      <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.7"/><path d="M12 3.3v17.4"/><path d="M12 6.4a5.6 5.6 0 0 1 0 11.2"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.6" y="8.6" width="11.8" height="11.8" rx="2.2"/><path d="M15.4 8.6V5.8a2.2 2.2 0 0 0-2.2-2.2H5.8a2.2 2.2 0 0 0-2.2 2.2v7.4a2.2 2.2 0 0 0 2.2 2.2h2.8"/></symbol>
+    </svg>
 
-    <nav class="tabs">
-      <button class="tab active" data-tab="inbox">Bandeja <span id="inbox-count" class="pill">0</span></button>
-      <button class="tab" data-tab="tasks">Tareas</button>
-      <button class="tab" data-tab="archive">Archivo</button>
-      <button class="tab" data-tab="trash">Papelera <span id="trash-pill" class="pill">0</span></button>
-      <button class="tab" data-tab="clients">Clientes</button>
-      <button class="tab" data-tab="attachments">Adjuntos</button>
-      <button class="tab" data-tab="chat">Chat</button>
-      <button class="tab" data-tab="pipeline">Proceso</button>
-      <button class="tab" data-tab="help">Ayuda</button>
-      <button class="tab" data-tab="settings">Ajustes</button>
-    </nav>
+    <div class="chrome">
+      <div class="chrome-inner">
+        <header>
+          <h1>Asistente de Tareas <span class="sub">seguimiento de pedidos</span></h1>
+          <div id="stats" class="stats"></div>
+        </header>
+
+        <nav class="tabs">
+          <button class="tab active" data-tab="inbox"><svg class="ico"><use href="#i-inbox" /></svg>Bandeja <span id="inbox-count" class="pill">0</span></button>
+          <button class="tab" data-tab="tasks"><svg class="ico"><use href="#i-tasks" /></svg>Tareas</button>
+          <button class="tab" data-tab="archive"><svg class="ico"><use href="#i-archive" /></svg>Archivo</button>
+          <button class="tab" data-tab="trash"><svg class="ico"><use href="#i-trash" /></svg>Papelera <span id="trash-pill" class="pill">0</span></button>
+          <button class="tab" data-tab="clients"><svg class="ico"><use href="#i-clients" /></svg>Clientes</button>
+          <button class="tab" data-tab="attachments"><svg class="ico"><use href="#i-clip" /></svg>Adjuntos</button>
+          <button class="tab" data-tab="chat"><svg class="ico"><use href="#i-chat" /></svg>Chat</button>
+          <button class="tab" data-tab="pipeline"><svg class="ico"><use href="#i-process" /></svg>Proceso</button>
+          <button class="tab" data-tab="help"><svg class="ico"><use href="#i-help" /></svg>Ayuda</button>
+          <button class="tab" data-tab="settings"><svg class="ico"><use href="#i-settings" /></svg>Ajustes</button>
+        </nav>
+      </div>
+    </div>
 
     <main>
       <!-- BANDEJA -->
@@ -34,8 +111,8 @@
           <label class="selall"><input type="checkbox" id="inbox-all" /> sel. todo</label>
           <span id="inbox-selcount" class="selcount"></span>
           <span class="bulk" id="inbox-bulk" hidden>
-            <button class="approve" id="inbox-bulk-approve">✓ Aprobar</button>
-            <button class="dismiss" id="inbox-bulk-delete">🗑 Eliminar</button>
+            <button class="approve" id="inbox-bulk-approve"><svg class="ico"><use href="#i-check" /></svg>Aprobar</button>
+            <button class="dismiss" id="inbox-bulk-delete"><svg class="ico"><use href="#i-trash" /></svg>Eliminar</button>
           </span>
         </div>
         <div id="inbox-list" class="cards"></div>
@@ -47,7 +124,7 @@
           <input id="nt-title" placeholder="Nueva tarea…" required />
           <input id="nt-detail" placeholder="detalle (opcional)" />
           <input id="nt-client" placeholder="cliente (opcional)" />
-          <button class="primary" type="submit">Agregar</button>
+          <button class="primary" type="submit"><svg class="ico"><use href="#i-plus" /></svg>Agregar</button>
         </form>
         <div class="toolbar">
           <input class="search" id="tasks-search" placeholder="Buscar tareas, cliente, texto…" />
@@ -63,8 +140,8 @@
             <input type="date" id="tasks-bulk-due" title="asignar fecha" />
             <input id="tasks-bulk-client" placeholder="cliente…" />
             <button id="tasks-bulk-setclient">Asignar</button>
-            <button id="tasks-bulk-archive">Archivar</button>
-            <button class="dismiss" id="tasks-bulk-delete">🗑 Eliminar</button>
+            <button id="tasks-bulk-archive"><svg class="ico"><use href="#i-archive" /></svg>Archivar</button>
+            <button class="dismiss" id="tasks-bulk-delete"><svg class="ico"><use href="#i-trash" /></svg>Eliminar</button>
           </span>
         </div>
         <div class="cols">
@@ -82,8 +159,8 @@
           <label class="selall"><input type="checkbox" id="archive-all" /> sel. todo</label>
           <span id="archive-selcount" class="selcount"></span>
           <span class="bulk" id="archive-bulk" hidden>
-            <button id="archive-bulk-unarchive">↩ Desarchivar</button>
-            <button class="dismiss" id="archive-bulk-delete">🗑 Eliminar</button>
+            <button id="archive-bulk-unarchive"><svg class="ico"><use href="#i-undo" /></svg>Desarchivar</button>
+            <button class="dismiss" id="archive-bulk-delete"><svg class="ico"><use href="#i-trash" /></svg>Eliminar</button>
           </span>
         </div>
         <div id="archive-list" class="cards"></div>
@@ -94,11 +171,11 @@
         <p class="hint">Elementos eliminados. Restaura para recuperarlos, o vacíalos para borrarlos definitivamente.</p>
         <div class="toolbar">
           <input class="search" id="trash-search" placeholder="Buscar…" />
-          <button class="dismiss" id="trash-empty">Vaciar papelera</button>
+          <button class="dismiss" id="trash-empty"><svg class="ico"><use href="#i-trash" /></svg>Vaciar papelera</button>
         </div>
-        <h3 class="trash-h">Tareas eliminadas <span id="trash-task-count" class="pill">0</span></h3>
+        <h3 class="trash-h"><svg class="ico"><use href="#i-tasks" /></svg>Tareas eliminadas <span id="trash-task-count" class="pill">0</span></h3>
         <div id="trash-tasks" class="cards"></div>
-        <h3 class="trash-h">Clientes eliminados <span id="trash-client-count" class="pill">0</span></h3>
+        <h3 class="trash-h"><svg class="ico"><use href="#i-clients" /></svg>Clientes eliminados <span id="trash-client-count" class="pill">0</span></h3>
         <div id="trash-clients" class="cards"></div>
       </section>
 
@@ -110,12 +187,12 @@
           <label class="selall"><input type="checkbox" id="clients-all" /> sel. todo</label>
           <span id="clients-selcount" class="selcount"></span>
           <span class="bulk" id="clients-bulk" hidden>
-            <button class="dismiss" id="clients-bulk-delete">🗑 Eliminar</button>
+            <button class="dismiss" id="clients-bulk-delete"><svg class="ico"><use href="#i-trash" /></svg>Eliminar</button>
           </span>
         </div>
         <div class="clientcats">
           <div id="clients-cats" class="chips"></div>
-          <button id="clients-autoclass" title="Etiqueta Personal/Oficina automáticamente con IA">✨ Clasificar automáticamente</button>
+          <button id="clients-autoclass" title="Etiqueta Personal/Oficina automáticamente con IA"><svg class="ico"><use href="#i-spark" /></svg>Clasificar automáticamente</button>
           <span id="clients-autoclass-status" class="run-status"></span>
         </div>
         <div id="senders-list" class="cards"></div>
@@ -123,7 +200,7 @@
 
       <!-- ADJUNTOS -->
       <section id="attachments" class="panel">
-        <p class="hint">Todas las imágenes, PDF, videos y archivos recibidos y enviados en los chats incluidos. Busca por nombre de archivo, contacto o chat; descarga una copia con el botón ⤓.</p>
+        <p class="hint">Todas las imágenes, PDF, videos y archivos recibidos y enviados en los chats incluidos. Busca por nombre de archivo, contacto o chat; descarga una copia con el botón de descarga.</p>
         <div class="toolbar">
           <input class="search" id="att-search" placeholder="Buscar por archivo, contacto o chat…" />
           <select id="att-type">
@@ -138,7 +215,7 @@
         </div>
         <div id="att-focus" class="att-focus" hidden></div>
         <div id="att-grid" class="att-grid"></div>
-        <div class="setrow" style="justify-content:center">
+        <div class="setrow" style="justify-content: center">
           <button id="att-more" hidden>Cargar más</button>
           <span id="att-status" class="run-status"></span>
         </div>
@@ -148,16 +225,17 @@
       <section id="chat" class="panel">
         <div class="chat-layout">
           <aside class="chat-side">
-            <button id="new-thread" class="primary">+ Nueva conversación</button>
+            <button id="new-thread" class="primary"><svg class="ico"><use href="#i-plus" /></svg>Nueva conversación</button>
             <div id="thread-list" class="thread-list"></div>
-            <button id="show-reminders" class="mem-toggle">⏰ Recordatorios <span id="reminders-count" class="pill">0</span></button>
-            <button id="show-memory" class="mem-toggle">🧠 Memoria <span id="memory-count" class="pill">0</span></button>
+            <button id="show-reminders" class="mem-toggle"><svg class="ico"><use href="#i-clock" /></svg>Recordatorios <span id="reminders-count" class="pill">0</span></button>
+            <button id="show-memory" class="mem-toggle"><svg class="ico"><use href="#i-memory" /></svg>Memoria <span id="memory-count" class="pill">0</span></button>
           </aside>
           <div class="chat-main">
             <div id="chat-log" class="chat-log"></div>
             <span id="chat-file-chip" class="file-chip" hidden></span>
             <form id="chat-form" class="chat-form">
-              <label class="attach-btn" title="Adjuntar imagen o PDF">📎
+              <label class="attach-btn" title="Adjuntar imagen o PDF">
+                <svg class="ico ico-lg"><use href="#i-clip" /></svg>
                 <input type="file" id="chat-file" accept="image/*,application/pdf" hidden />
               </label>
               <input id="chat-input" placeholder="p. ej. ¿Qué me pidieron los clientes esta semana que aún no he hecho?" autocomplete="off" />
@@ -165,16 +243,16 @@
             </form>
             <div id="memory-panel" class="memory-panel" hidden>
               <div class="mem-head">
-                <strong>🧠 Memoria del asistente</strong>
-                <button id="close-memory">cerrar</button>
+                <strong><svg class="ico ico-lg"><use href="#i-memory" /></svg>Memoria del asistente</strong>
+                <button id="close-memory"><svg class="ico"><use href="#i-close" /></svg>cerrar</button>
               </div>
               <p class="hint">Datos que el asistente ha guardado para recordar entre conversaciones. Elimina lo que no quieras que recuerde.</p>
               <div id="memory-list" class="cards"></div>
             </div>
             <div id="reminders-panel" class="memory-panel" hidden>
               <div class="mem-head">
-                <strong>⏰ Recordatorios programados</strong>
-                <button id="close-reminders">cerrar</button>
+                <strong><svg class="ico ico-lg"><use href="#i-clock" /></svg>Recordatorios programados</strong>
+                <button id="close-reminders"><svg class="ico"><use href="#i-close" /></svg>cerrar</button>
               </div>
               <p class="hint">Recordatorios que programaste con el asistente. Cancela los que ya no necesites.</p>
               <div id="reminders-list" class="cards"></div>
@@ -198,23 +276,23 @@
 
         <div class="controls">
           <strong>Continuo</strong>
-          <button id="backfill" class="primary">Importar historial</button>
+          <button id="backfill" class="primary"><svg class="ico"><use href="#i-import" /></svg>Importar historial</button>
           <label><input id="backfill-count" type="number" value="2000" min="100" max="50000" /> mensajes</label>
-          <button id="process" class="primary">Procesar mensajes nuevos</button>
+          <button id="process" class="primary"><svg class="ico"><use href="#i-spark" /></svg>Procesar mensajes nuevos</button>
           <span id="proc-status" class="run-status"></span>
         </div>
 
         <div class="pipeline-grid">
           <div class="pcol">
-            <h3>Mensajes revisados <span id="msg-count" class="pill">0</span></h3>
+            <h3><svg class="ico"><use href="#i-message" /></svg>Mensajes revisados <span id="msg-count" class="pill">0</span></h3>
             <div id="msg-feed" class="feed"></div>
           </div>
           <div class="pcol">
-            <h3>Imágenes y PDF analizados <span id="vis-count" class="pill">0</span></h3>
+            <h3><svg class="ico"><use href="#i-file" /></svg>Imágenes y PDF analizados <span id="vis-count" class="pill">0</span></h3>
             <div id="vis-feed" class="feed"></div>
           </div>
           <div class="pcol">
-            <h3>Tareas propuestas <span id="task-count" class="pill">0</span></h3>
+            <h3><svg class="ico"><use href="#i-tasks" /></svg>Tareas propuestas <span id="task-count" class="pill">0</span></h3>
             <div id="task-feed" class="feed"></div>
           </div>
         </div>
@@ -262,44 +340,57 @@
           <ul>
             <li><b>Día a día:</b> deja la app abierta. WhatsApp se captura solo; pulsa <b>Procesar mensajes nuevos</b> cuando quieras revisar tareas nuevas.</li>
             <li><b>Puesta al día grande:</b> <b>Importar historial</b> con un número alto y luego <b>Procesar</b>. Lo reciente sale enseguida; para el historial antiguo, vuelve a pulsar Procesar de vez en cuando (o deja que el proceso diario lo vacíe solo).</li>
-            <li><b>Ver tareas:</b> revisa <b>Bandeja</b> (propuestas), apruébalas a <b>Tareas</b>, y usa el enlace <b>📎 ver archivo</b> de una tarea para saltar al archivo que la originó en <b>Adjuntos</b>.</li>
+            <li><b>Ver tareas:</b> revisa <b>Bandeja</b> (propuestas), apruébalas a <b>Tareas</b>, y usa el enlace <b>ver archivo</b> de una tarea para saltar al archivo que la originó en <b>Adjuntos</b>.</li>
           </ul>
         </div>
       </section>
 
       <!-- AJUSTES -->
       <section id="settings" class="panel">
+        <div class="setblock" id="theme-block">
+          <h3><svg class="ico"><use href="#i-theme" /></svg>Apariencia</h3>
+          <p class="hint">Cómo se ve la app. <b>Automático</b> sigue el aspecto que tengas puesto en macOS y cambia solo cuando este cambia.</p>
+          <div class="setrow">
+            <div class="seg" id="theme-seg" role="group" aria-label="Aspecto de la aplicación">
+              <button type="button" class="seg-btn" data-theme-choice="auto"><svg class="ico"><use href="#i-auto" /></svg>Automático</button>
+              <button type="button" class="seg-btn" data-theme-choice="light"><svg class="ico"><use href="#i-sun" /></svg>Claro</button>
+              <button type="button" class="seg-btn" data-theme-choice="dark"><svg class="ico"><use href="#i-moon" /></svg>Oscuro</button>
+            </div>
+            <span id="theme-saved" class="saved"></span>
+          </div>
+        </div>
+
         <div class="setblock" id="diag-block">
-          <h3>Diagnóstico</h3>
+          <h3><svg class="ico"><use href="#i-diag" /></svg>Diagnóstico</h3>
           <p class="hint">De qué base de datos está leyendo/escribiendo esta instancia ahora mismo — útil si algo parece "no actualizarse" (mensajes o tareas que no aparecen).</p>
           <div id="diag-body" class="hint">Cargando…</div>
           <div class="setrow">
-            <button id="diag-copy">Copiar diagnóstico</button>
+            <button id="diag-copy"><svg class="ico"><use href="#i-copy" /></svg>Copiar diagnóstico</button>
             <span id="diag-copied" class="saved"></span>
           </div>
         </div>
 
-        <div class="setblock" id="update-block" style="display:none">
-          <h3>Actualizaciones <span id="upd-badge" class="badge" style="display:none">nueva</span></h3>
+        <div class="setblock" id="update-block" style="display: none">
+          <h3><svg class="ico"><use href="#i-update" /></svg>Actualizaciones <span id="upd-badge" class="badge b-todo" style="display: none">nueva</span></h3>
           <p class="hint" id="upd-status">Versión actual: …</p>
           <div class="setrow">
             <button id="upd-check" class="primary">Buscar actualizaciones</button>
-            <button id="upd-install" style="display:none">Instalar y reiniciar</button>
-            <span id="upd-msg" class="hint" style="margin:0"></span>
+            <button id="upd-install" style="display: none">Instalar y reiniciar</button>
+            <span id="upd-msg" class="hint" style="margin: 0"></span>
           </div>
         </div>
 
         <div class="setblock" id="wa-block">
-          <h3>Cuentas de WhatsApp</h3>
+          <h3><svg class="ico"><use href="#i-phone" /></svg>Cuentas de WhatsApp</h3>
           <p class="hint">Espejos de solo lectura de tu WhatsApp — nunca envían mensajes. Puedes conectar varias cuentas (números) a la vez. Para vincular cada una: en ese teléfono abre WhatsApp → Ajustes → Dispositivos vinculados → Vincular un dispositivo, y escanea el QR.</p>
           <div id="wa-accounts"></div>
           <div class="setrow">
-            <button id="wa-add" class="primary">+ Agregar cuenta de WhatsApp</button>
+            <button id="wa-add" class="primary"><svg class="ico"><use href="#i-plus" /></svg>Agregar cuenta de WhatsApp</button>
           </div>
         </div>
 
         <div class="setblock">
-          <h3>Clave de API de Anthropic</h3>
+          <h3><svg class="ico"><use href="#i-key" /></svg>Clave de API de Anthropic</h3>
           <p class="hint" id="key-status"></p>
           <div class="setrow">
             <input id="api-key" type="password" placeholder="sk-ant-…" autocomplete="off" />
@@ -309,7 +400,7 @@
         </div>
 
         <div class="setblock">
-          <h3>Procesamiento automático diario</h3>
+          <h3><svg class="ico"><use href="#i-calendar" /></svg>Procesamiento automático diario</h3>
           <p class="hint">Cada día a esta hora la app trae los mensajes nuevos y propone tareas automáticamente. Requiere que la app esté abierta (siempre encendida en la Mac Studio).</p>
           <div class="setrow">
             <label class="check"><input id="sched-on" type="checkbox" /> Ejecutar automáticamente</label>
@@ -320,11 +411,11 @@
         </div>
 
         <div class="setblock">
-          <h3>Recordatorios y notificaciones</h3>
+          <h3><svg class="ico"><use href="#i-bell" /></svg>Recordatorios y notificaciones</h3>
           <p class="hint">Notificaciones nativas de macOS: un resumen matutino de lo pendiente, más avisos que reaparecen hasta completar las tareas. Asegúrate de habilitar las notificaciones de la app en Ajustes del Sistema → Notificaciones.</p>
           <div class="setrow">
             <label class="check"><input id="rem-on" type="checkbox" /> Enviar recordatorios</label>
-            <label>recordar cada <input id="rem-interval" type="number" value="2" min="1" max="30" style="width:3.5em" /> días</label>
+            <label>recordar cada <input id="rem-interval" type="number" value="2" min="1" max="30" style="width: 4.5em" /> días</label>
             <button id="save-rem" class="primary">Guardar</button>
             <span id="rem-saved" class="saved"></span>
           </div>
@@ -337,7 +428,7 @@
         </div>
 
         <div class="setblock">
-          <h3>Chats de iMessage a incluir</h3>
+          <h3><svg class="ico"><use href="#i-message" /></svg>Chats de iMessage a incluir</h3>
           <p class="hint" id="chats-note">Elige de qué conversaciones extraer tareas. Sin selección = todos los chats.</p>
           <input class="search" id="chats-search" placeholder="Buscar chat por nombre o número…" />
           <div id="chats-list" class="chatsel"></div>
@@ -347,13 +438,12 @@
             <span id="chats-saved" class="saved"></span>
           </div>
         </div>
-
       </section>
     </main>
 
     <div id="digest-overlay" class="overlay" hidden>
       <div class="modal">
-        <h2 id="digest-title">☀️ Buenos días</h2>
+        <h2 id="digest-title"><svg class="ico ico-lg"><use href="#i-sun" /></svg>Buenos días</h2>
         <div id="digest-body"></div>
         <div class="modal-actions"><button id="digest-ok" class="primary">Entendido</button></div>
       </div>
@@ -361,10 +451,10 @@
 
     <!-- Quick-Look-style file preview -->
     <div id="ql-overlay" class="ql-overlay" hidden>
-      <button class="ql-btn ql-close" title="Cerrar (Esc)">✕</button>
-      <button class="ql-btn ql-nav ql-prev" title="Anterior (←)">‹</button>
+      <button class="ql-btn ql-close" title="Cerrar (Esc)" aria-label="Cerrar"><svg class="ico"><use href="#i-close" /></svg></button>
+      <button class="ql-btn ql-nav ql-prev" title="Anterior (←)" aria-label="Anterior"><svg class="ico"><use href="#i-left" /></svg></button>
       <div class="ql-stage"></div>
-      <button class="ql-btn ql-nav ql-next" title="Siguiente (→)">›</button>
+      <button class="ql-btn ql-nav ql-next" title="Siguiente (→)" aria-label="Siguiente"><svg class="ico"><use href="#i-right" /></svg></button>
       <div class="ql-caption"></div>
     </div>
 

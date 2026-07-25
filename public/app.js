@@ -7,6 +7,11 @@ const el = (html) => {
 const esc = (s) =>
   (s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// Presentational only: renders one icon from the <svg class="sprite"> symbol set
+// defined at the top of index.html. Keeps a single stroke weight everywhere and
+// inherits colour from its context via `currentColor`.
+const ico = (name, cls = '') => `<svg class="ico${cls ? ' ' + cls : ''}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+
 // In-app text prompt. Electron doesn't implement window.prompt() (it silently
 // returns null), so we roll our own. Resolves to the string, or null on cancel.
 function askText(message, defaultValue = '') {
@@ -111,6 +116,190 @@ function prettySender(sender, senderName) {
   if (s.endsWith('@g.us')) return 'grupo';
   return s || '?';
 }
+
+// ---- Date picker ----------------------------------------------------------
+// Chromium's native calendar panel can't be themed, so it's suppressed in CSS
+// and this popover takes its place. It is purely presentational: it writes the
+// same "YYYY-MM-DD" string into the same <input type="date"> and fires the same
+// `change` event, so every existing handler keeps working untouched. Typing
+// directly into the field also still works.
+const DP_MONTHS = [
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+];
+const DP_DOW = ['L', 'M', 'X', 'J', 'V', 'S', 'D']; // Spanish week starts Monday
+let dpNode = null;
+let dpInput = null;
+let dpView = null; // { y, m } — the month currently on screen
+
+const dpISO = (y, m, d) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+function dpParse(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v || '');
+  return m ? { y: +m[1], m: +m[2] - 1, d: +m[3] } : null;
+}
+
+function closeDatePicker() {
+  if (!dpNode) return;
+  dpNode.remove();
+  dpNode = null;
+  dpInput = null;
+  dpView = null;
+}
+
+function dpPosition() {
+  if (!dpNode || !dpInput) return;
+  const r = dpInput.getBoundingClientRect();
+  const w = dpNode.offsetWidth;
+  const h = dpNode.offsetHeight;
+  const left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - w - 8));
+  // Flip above the field when there isn't room below it.
+  const top = r.bottom + 8 + h > window.innerHeight - 8 ? Math.max(8, r.top - h - 8) : r.bottom + 8;
+  dpNode.style.left = `${left}px`;
+  dpNode.style.top = `${top}px`;
+}
+
+function dpRender() {
+  const sel = dpParse(dpInput.value);
+  const selISO = sel ? dpISO(sel.y, sel.m, sel.d) : null;
+  const todayISO = (() => { const n = new Date(); return dpISO(n.getFullYear(), n.getMonth(), n.getDate()); })();
+  const { y, m } = dpView;
+  const lead = (new Date(y, m, 1).getDay() + 6) % 7; // Monday-first offset
+  let cells = '';
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(y, m, i - lead + 1); // JS normalizes over month edges
+    const iso = dpISO(d.getFullYear(), d.getMonth(), d.getDate());
+    const cls = [
+      'dp-day',
+      d.getMonth() === m ? '' : 'out',
+      iso === todayISO ? 'today' : '',
+      iso === selISO ? 'sel' : '',
+    ].filter(Boolean).join(' ');
+    cells += `<button type="button" class="${cls}" data-iso="${iso}">${d.getDate()}</button>`;
+  }
+  dpNode.querySelector('.dp-title').textContent = `${DP_MONTHS[m]} ${y}`;
+  dpNode.querySelector('.dp-grid').innerHTML = cells;
+}
+
+function dpCommit(iso) {
+  const input = dpInput;
+  closeDatePicker();
+  // A background refresh can re-render the card out from under an open picker,
+  // leaving `input` detached — writing to it then would silently do nothing.
+  if (!input || !input.isConnected) return;
+  input.value = iso;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function dpShift(delta) {
+  dpView.m += delta;
+  if (dpView.m < 0) { dpView.m = 11; dpView.y--; }
+  else if (dpView.m > 11) { dpView.m = 0; dpView.y++; }
+  dpRender();
+}
+
+function openDatePicker(input) {
+  closeDatePicker();
+  dpInput = input;
+  const sel = dpParse(input.value);
+  const now = new Date();
+  dpView = sel ? { y: sel.y, m: sel.m } : { y: now.getFullYear(), m: now.getMonth() };
+  dpNode = el(`<div class="dp" role="dialog" aria-label="Elegir fecha">
+    <div class="dp-head">
+      <button type="button" class="dp-prev iconbtn" aria-label="Mes anterior">${ico('left')}</button>
+      <span class="dp-title"></span>
+      <button type="button" class="dp-next iconbtn" aria-label="Mes siguiente">${ico('right')}</button>
+    </div>
+    <div class="dp-dow">${DP_DOW.map((d) => `<span>${d}</span>`).join('')}</div>
+    <div class="dp-grid"></div>
+    <div class="dp-foot">
+      <button type="button" class="dp-clear">Borrar</button>
+      <button type="button" class="dp-today primary">Hoy</button>
+    </div>
+  </div>`);
+  document.body.append(dpNode);
+  dpRender();
+  dpPosition();
+  dpNode.querySelector('.dp-prev').onclick = () => dpShift(-1);
+  dpNode.querySelector('.dp-next').onclick = () => dpShift(1);
+  dpNode.querySelector('.dp-clear').onclick = () => dpCommit('');
+  dpNode.querySelector('.dp-today').onclick = () => {
+    const n = new Date();
+    dpCommit(dpISO(n.getFullYear(), n.getMonth(), n.getDate()));
+  };
+  dpNode.addEventListener('click', (e) => {
+    const day = e.target.closest('.dp-day');
+    if (day) dpCommit(day.dataset.iso);
+  });
+}
+
+const dpFieldAt = (target) => (target && target.closest ? target.closest("input[type='date']") : null);
+
+document.addEventListener('click', (e) => {
+  const field = dpFieldAt(e.target);
+  if (field) {
+    if (dpInput !== field) openDatePicker(field);
+    return;
+  }
+  if (dpNode && !e.target.closest('.dp')) closeDatePicker();
+});
+document.addEventListener('keydown', (e) => {
+  const field = dpFieldAt(e.target);
+  // The keys Chromium uses to summon its own calendar — take them over.
+  if (field && (e.key === 'F4' || e.key === ' ' || (e.altKey && e.key === 'ArrowDown'))) {
+    e.preventDefault();
+    openDatePicker(field);
+    return;
+  }
+  if (dpNode && e.key === 'Escape') {
+    e.preventDefault();
+    closeDatePicker();
+  }
+});
+window.addEventListener('resize', () => dpPosition());
+window.addEventListener('scroll', () => dpPosition(), true);
+
+// ---- Apariencia (claro / oscuro) ------------------------------------------
+// Display-only preference kept in localStorage; the resolver that stamps
+// <html data-theme> lives inline in index.html so it runs before first paint.
+const THEME_KEY = 'theme';
+function themePref() {
+  try {
+    return localStorage.getItem(THEME_KEY) || 'auto';
+  } catch {
+    return 'auto';
+  }
+}
+function paintThemeSeg() {
+  const pref = themePref();
+  document.querySelectorAll('#theme-seg .seg-btn').forEach((b) => {
+    const on = b.dataset.themeChoice === pref;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+}
+function setThemePref(pref) {
+  try {
+    localStorage.setItem(THEME_KEY, pref);
+  } catch {
+    /* preference just won't persist */
+  }
+  const paint = () => {
+    if (window.applyTheme) window.applyTheme();
+    paintThemeSeg();
+  };
+  // Crossfade the whole document instead of snapping, where supported.
+  if (document.startViewTransition) document.startViewTransition(paint);
+  else paint();
+  const saved = $('#theme-saved');
+  if (saved) {
+    saved.innerHTML = `${ico('check')}guardado`;
+    setTimeout(() => (saved.innerHTML = ''), 1800);
+  }
+}
+document.querySelectorAll('#theme-seg .seg-btn').forEach((b) => {
+  b.onclick = () => setThemePref(b.dataset.themeChoice);
+});
+paintThemeSeg();
 
 // ---- Tabs ----
 document.querySelectorAll('.tab').forEach((btn) => {
@@ -267,7 +456,7 @@ function renderInbox() {
   list.innerHTML = '';
   const items = filteredInbox();
   if (!items.length) {
-    list.append(el(`<div class="empty">${inboxItems.length ? 'Nada coincide con la búsqueda.' : 'Aún no hay tareas propuestas. Usa la pestaña Proceso para encontrar algunas.'}</div>`));
+    list.append(el(`<div class="empty">${inboxItems.length ? ico('search', 'ico-xl') + 'Nada coincide con la búsqueda.' : ico('inbox', 'ico-xl') + 'Aún no hay tareas propuestas. Usa la pestaña Proceso para encontrar algunas.'}</div>`));
     inboxSel.refresh();
     return;
   }
@@ -278,13 +467,13 @@ function renderInbox() {
       <div class="cardbody">
         <div class="title">${esc(t.title)}</div>
         <div class="detail">${esc(t.detail)}</div>
-        ${t.sourceQuote ? `<div class="quote">🔎 buscar ${who ? 'a ' + esc(who) : ''}: <span>"${esc(t.sourceQuote)}"</span></div>` : ''}
-        ${t.sourceBody && !t.sourceQuote ? `<div class="src">${t.hasAttachment ? '📎 ' : ''}${esc(t.sourceBody.slice(0, 160))}</div>` : ''}
-        ${t.hasAttachment && t.sourceMessageId ? `<div class="filelink"><a href="#" class="j-file">📎 ver archivo</a></div>` : ''}
+        ${t.sourceQuote ? `<div class="quote">${ico('search')}<span class="qtext">buscar ${who ? 'a ' + esc(who) : ''}: <span>"${esc(t.sourceQuote)}"</span></span></div>` : ''}
+        ${t.sourceBody && !t.sourceQuote ? `<div class="src">${t.hasAttachment ? ico('clip') + ' ' : ''}${esc(t.sourceBody.slice(0, 160))}</div>` : ''}
+        ${t.hasAttachment && t.sourceMessageId ? `<div class="filelink"><a href="#" class="j-file">${ico('clip')}ver archivo</a></div>` : ''}
         <div class="meta">${who ? `<span>cliente: ${esc(who)}</span>` : ''}${t.createdAt ? `<span>generada: ${esc(fmtGen(t.createdAt))}</span>` : ''}${accountBadge(t.source, t.waAccount)}</div>
         <div class="actions">
-          <button class="approve j-approve">✓ Aprobar</button>
-          <button class="dismiss j-del" title="Eliminar">🗑</button>
+          <button class="approve j-approve">${ico('check')}Aprobar</button>
+          <button class="dismiss j-del iconbtn" title="Eliminar" aria-label="Eliminar">${ico('trash')}</button>
         </div>
       </div>
     </div>`);
@@ -369,16 +558,16 @@ function renderTasks() {
       <div class="cardbody">
         <div class="title">${esc(t.title)}</div>
         <div class="detail">${esc(t.detail)}</div>
-        ${t.sourceQuote ? `<div class="quote">🔎 "${esc(t.sourceQuote)}"</div>` : ''}
-        ${t.hasAttachment && t.sourceMessageId ? `<div class="filelink"><a href="#" class="j-file">📎 ver archivo</a></div>` : ''}
+        ${t.sourceQuote ? `<div class="quote">${ico('search')}<span>"${esc(t.sourceQuote)}"</span></div>` : ''}
+        ${t.hasAttachment && t.sourceMessageId ? `<div class="filelink"><a href="#" class="j-file">${ico('clip')}ver archivo</a></div>` : ''}
         <div class="meta">
           ${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}${accountBadge(t.source, t.waAccount)}
           <label class="due ${overdue ? 'overdue' : ''}">vence <input type="date" class="duedate" value="${dateInput(t.dueAt)}" /></label>
         </div>
         <div class="actions">
           <select class="status">${options}</select>
-          <button class="dismiss archivebtn">Archivar</button>
-          <button class="dismiss j-del" title="Eliminar">🗑</button>
+          <button class="archivebtn">${ico('archive')}Archivar</button>
+          <button class="dismiss j-del iconbtn" title="Eliminar" aria-label="Eliminar">${ico('trash')}</button>
         </div>
       </div>
     </div>`);
@@ -445,7 +634,7 @@ function renderArchive() {
   list.innerHTML = '';
   const items = filteredArchive();
   if (!items.length) {
-    list.append(el(`<div class="empty">${archiveItems.length ? 'Nada coincide con la búsqueda.' : 'No hay nada archivado todavía.'}</div>`));
+    list.append(el(`<div class="empty">${archiveItems.length ? ico('search', 'ico-xl') + 'Nada coincide con la búsqueda.' : ico('archive', 'ico-xl') + 'No hay nada archivado todavía.'}</div>`));
     archiveSel.refresh();
     return;
   }
@@ -457,8 +646,8 @@ function renderArchive() {
         <div class="detail">${esc(t.detail)}</div>
         <div class="meta"><span class="badge b-done">${esc(statusLabel(t.status))}</span>${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}</div>
         <div class="actions">
-          <button class="approve j-unarchive">↩ Desarchivar</button>
-          <button class="dismiss j-del" title="Eliminar">🗑</button>
+          <button class="approve j-unarchive">${ico('undo')}Desarchivar</button>
+          <button class="dismiss j-del iconbtn" title="Eliminar" aria-label="Eliminar">${ico('trash')}</button>
         </div>
       </div>
     </div>`);
@@ -492,7 +681,7 @@ function handleEvent(e) {
     const atts = (e.attachments || [])
       .map((a) =>
         a.mime === 'application/pdf'
-          ? `<a class="matt pdf" href="/api/attachment?id=${e.id}&i=${a.index}" target="_blank" rel="noopener">📄 PDF</a>`
+          ? `<a class="matt pdf" href="/api/attachment?id=${e.id}&i=${a.index}" target="_blank" rel="noopener">${ico('pdf')}PDF</a>`
           : `<img class="matt" loading="lazy" onerror="this.remove()" src="/api/attachment?id=${e.id}&i=${a.index}" alt="" />`,
       )
       .join('');
@@ -502,7 +691,7 @@ function handleEvent(e) {
     const clip = atts && isMarker ? '' : `<div class="clip">${esc(e.body)}</div>`;
     const when = e.ts ? `<span class="mwhen">${esc(fmtMsgTime(e.ts))}</span>` : '';
     $('#msg-feed').append(el(`<div class="mrow ${e.direction === 'outgoing' ? 'out' : ''}">
-      <div class="who"><span>${sourceBadge(e.source)}${accountBadge(e.source, e.waAccount)} ${who}</span><span class="mmeta">${when}${e.hasAttachment ? '<span class="paperclip">📎</span>' : ''}</span></div>
+      <div class="who"><span>${sourceBadge(e.source)}${accountBadge(e.source, e.waAccount)} ${who}</span><span class="mmeta">${when}${e.hasAttachment ? `<span class="paperclip" title="tiene adjunto">${ico('clip')}</span>` : ''}</span></div>
       ${clip}${atts ? `<div class="matts">${atts}</div>` : ''}</div>`));
   } else if (e.type === 'vision') {
     counters.vis++;
@@ -520,7 +709,7 @@ function handleEvent(e) {
     $('#task-feed').append(el(`<div class="tcard">
       <div class="title">${esc(e.title)}</div>
       <div class="detail">${esc(e.detail)}</div>
-      ${e.sourceQuote ? `<div class="quote">🔎 "${esc(e.sourceQuote)}"</div>` : ''}
+      ${e.sourceQuote ? `<div class="quote">${ico('search')}<span>"${esc(e.sourceQuote)}"</span></div>` : ''}
       <div class="who">${e.client ? 'cliente: ' + esc(displayName(e.client)) : ''}</div></div>`));
   }
 }
@@ -646,7 +835,7 @@ function renderSenders() {
   list.innerHTML = '';
   const items = filteredSenders();
   if (!items.length) {
-    list.append(el(`<div class="empty">${sendersItems.length ? 'Nada coincide con la búsqueda.' : 'Aún no hay remitentes — primero importa algunos mensajes.'}</div>`));
+    list.append(el(`<div class="empty">${sendersItems.length ? ico('search', 'ico-xl') + 'Nada coincide con la búsqueda.' : ico('clients', 'ico-xl') + 'Aún no hay remitentes: primero importa algunos mensajes.'}</div>`));
     clientsSel.refresh();
     return;
   }
@@ -658,7 +847,7 @@ function renderSenders() {
     const cats = knownCats();
     const catOpts = ['<option value="">Sin clasificar</option>']
       .concat(cats.map((c) => `<option value="${esc(c)}" ${s.category === c ? 'selected' : ''}>${esc(c)}</option>`))
-      .concat('<option value="__new__">＋ Nueva…</option>')
+      .concat('<option value="__new__">+ Nueva…</option>')
       .join('');
     const card = el(`<div class="card sender">
       <input type="checkbox" class="sel" data-id="${esc(s.handle)}" />
@@ -753,7 +942,7 @@ async function renderFocus() {
     if (!items.length) return;
     box.hidden = false;
     const head = el(
-      `<div class="att-focus-head"><span>📎 Archivo de la tarea</span><button class="att-focus-clear">quitar</button></div>`,
+      `<div class="att-focus-head"><span>${ico('clip')}Archivo de la tarea</span><button class="att-focus-clear">quitar</button></div>`,
     );
     head.querySelector('.att-focus-clear').onclick = () => {
       attFocusId = null;
@@ -824,12 +1013,13 @@ function attWho(a) {
 
 // The actual media element for a downloaded/available attachment.
 function attMediaHtml(a, src) {
-  if (a.category === 'image') return `<img class="att-thumb" loading="lazy" src="${src}" alt="" />`;
+  const label = esc(a.filename || a.category || 'archivo');
+  if (a.category === 'image') return `<img class="att-thumb" loading="lazy" src="${src}" alt="${label}" />`;
   if (a.category === 'video') return `<video class="att-thumb" controls preload="metadata" src="${src}"></video>`;
   if (a.category === 'pdf')
-    return `<a class="att-thumb att-icon" href="${src}" target="_blank" rel="noopener">📄<span>PDF</span></a>`;
+    return `<a class="att-thumb att-icon" href="${src}" target="_blank" rel="noopener">${ico('pdf', 'ico-xl')}<span>PDF</span></a>`;
   if (a.category === 'audio') return `<audio controls preload="none" src="${src}"></audio>`;
-  return `<div class="att-thumb att-icon">📎<span>archivo</span></div>`;
+  return `<div class="att-thumb att-icon">${ico('file', 'ico-xl')}<span>archivo</span></div>`;
 }
 
 // When an <img>/<video> in a card fails to load, replace it with a placeholder.
@@ -838,7 +1028,7 @@ function attWireError(card, label) {
   if (m)
     m.addEventListener('error', () => {
       const box = card.querySelector('.att-media');
-      if (box) box.innerHTML = `<div class="att-thumb att-icon att-unavail">🚫<span>${label}</span></div>`;
+      if (box) box.innerHTML = `<div class="att-thumb att-icon att-unavail">${ico('ban', 'ico-xl')}<span>${label}</span></div>`;
     });
 }
 
@@ -850,22 +1040,22 @@ function attCard(a, list, idx) {
   let media;
   if (st === 'ok') media = attMediaHtml(a, src);
   else if (st === 'fetch')
-    media = `<div class="att-thumb att-icon att-unavail"><button class="att-load">⬇ ver archivo</button><span>de WhatsApp</span></div>`;
+    media = `<div class="att-thumb att-icon att-unavail"><button class="att-load">${ico('download')}ver archivo</button><span>de WhatsApp</span></div>`;
   else if (st === 'fda')
-    media = `<div class="att-thumb att-icon att-unavail">🔒<span>Activa Acceso total al disco</span></div>`;
-  else media = `<div class="att-thumb att-icon att-unavail">🚫<span>no está en este Mac</span></div>`;
+    media = `<div class="att-thumb att-icon att-unavail">${ico('lock', 'ico-xl')}<span>Activa Acceso total al disco</span></div>`;
+  else media = `<div class="att-thumb att-icon att-unavail">${ico('ban', 'ico-xl')}<span>no está en este Mac</span></div>`;
   const name = a.filename || a.category;
   // Download only makes sense when the file is (or can be) fetched.
   const canDownload = st === 'ok' || st === 'fetch';
   const card = el(`<div class="att-card">
-    <div class="att-media">${media}<button class="att-expand" title="Vista previa">⤢</button></div>
+    <div class="att-media">${media}<button class="att-expand" title="Vista previa" aria-label="Vista previa">${ico('expand')}</button></div>
     <div class="att-meta">
       <div class="att-name" title="${esc(name)}">${esc(name)}</div>
       <div class="att-sub">${sourceBadge(a.source)}${accountBadge(a.source, a.waAccount)} ${attWho(a)}</div>
       ${a.chatName ? `<div class="att-sub att-where" title="${esc(a.chatName)}">${esc(a.chatName)}</div>` : ''}
       <div class="att-sub att-when">${esc(fmtMsgTime(a.ts))}</div>
     </div>
-    ${canDownload ? `<a class="att-dl" href="${src}&download=1" title="Descargar una copia">⤓</a>` : ''}
+    ${canDownload ? `<a class="att-dl" href="${src}&download=1" title="Descargar una copia" aria-label="Descargar una copia">${ico('download')}</a>` : ''}
   </div>`);
 
   // Open the Quick-Look-style preview from the ⤢ button, or by clicking the tile
@@ -886,7 +1076,7 @@ function attCard(a, list, idx) {
   if (loadBtn)
     loadBtn.onclick = () => {
       const box = card.querySelector('.att-media');
-      box.innerHTML = `<div class="att-thumb att-icon"><span>descargando…</span></div>`;
+      box.innerHTML = `<div class="att-thumb att-icon">${ico('download', 'ico-xl')}<span>descargando…</span></div>`;
       // A cache-busting param forces a fresh request that triggers the download.
       const freshSrc = `${src}&t=${Date.now()}`;
       box.innerHTML = attMediaHtml(a, freshSrc);
@@ -917,7 +1107,7 @@ function renderAttachments() {
   if (!items.length) {
     grid.append(
       el(
-        `<div class="empty">${attItems.length ? 'Nada coincide con la búsqueda.' : 'No hay adjuntos en los chats incluidos todavía.'}</div>`,
+        `<div class="empty">${attItems.length ? ico('search', 'ico-xl') + 'Nada coincide con la búsqueda.' : ico('clip', 'ico-xl') + 'No hay adjuntos en los chats incluidos todavía.'}</div>`,
       ),
     );
   } else {
@@ -940,15 +1130,15 @@ function qlOkMedia(a, src) {
   if (a.category === 'video') return `<video class="ql-media" controls autoplay src="${src}"></video>`;
   if (a.category === 'audio') return `<audio class="ql-audio" controls autoplay src="${src}"></audio>`;
   if (a.category === 'pdf') return `<iframe class="ql-frame" src="${src}"></iframe>`;
-  return `<div class="ql-note">📎<div>Este tipo de archivo no se puede previsualizar. Usa “Descargar copia”.</div></div>`;
+  return `<div class="ql-note">${ico('file', 'ico-xl')}<div>Este tipo de archivo no se puede previsualizar. Usa “Descargar copia”.</div></div>`;
 }
 
 function qlStageHtml(a, src, st) {
   if (st === 'ok') return qlOkMedia(a, src);
-  if (st === 'fetch') return `<div class="ql-note">📥<button class="ql-load">Descargar de WhatsApp para ver</button></div>`;
+  if (st === 'fetch') return `<div class="ql-note">${ico('download', 'ico-xl')}<button class="ql-load">Descargar de WhatsApp para ver</button></div>`;
   if (st === 'fda')
-    return `<div class="ql-note">🔒<div>Activa <b>Acceso total al disco</b> para ver los archivos de iMessage.</div></div>`;
-  return `<div class="ql-note">🚫<div>Este archivo no está en este Mac (se borró o está en iCloud).</div></div>`;
+    return `<div class="ql-note">${ico('lock', 'ico-xl')}<div>Activa <b>Acceso total al disco</b> para ver los archivos de iMessage.</div></div>`;
+  return `<div class="ql-note">${ico('ban', 'ico-xl')}<div>Este archivo no está en este Mac (se borró o está en iCloud).</div></div>`;
 }
 
 function qlRender() {
@@ -964,17 +1154,17 @@ function qlRender() {
   const loadBtn = stage.querySelector('.ql-load');
   if (loadBtn)
     loadBtn.onclick = () => {
-      stage.innerHTML = `<div class="ql-note"><div>Descargando…</div></div>`;
+      stage.innerHTML = `<div class="ql-note">${ico('download', 'ico-xl')}<div>Descargando…</div></div>`;
       stage.innerHTML = qlOkMedia(a, `${src}&t=${Date.now()}`);
       const m = stage.querySelector('img.ql-media, video.ql-media');
       if (m) m.addEventListener('error', () => {
-        stage.innerHTML = `<div class="ql-note">🚫<div>No disponible — conecta WhatsApp e inténtalo de nuevo.</div></div>`;
+        stage.innerHTML = `<div class="ql-note">${ico('ban', 'ico-xl')}<div>No disponible. Conecta WhatsApp e inténtalo de nuevo.</div></div>`;
       });
     };
   const okMedia = stage.querySelector('img.ql-media, video.ql-media');
   if (st === 'ok' && okMedia)
     okMedia.addEventListener('error', () => {
-      stage.innerHTML = `<div class="ql-note">🚫<div>No se pudo cargar el archivo.</div></div>`;
+      stage.innerHTML = `<div class="ql-note">${ico('ban', 'ico-xl')}<div>No se pudo cargar el archivo.</div></div>`;
     });
 
   const name = a.filename || a.category;
@@ -984,7 +1174,7 @@ function qlRender() {
     `<div class="ql-sub">${sourceBadge(a.source)}${accountBadge(a.source, a.waAccount)} ${attWho(a)}` +
     `${a.chatName ? ` · ${esc(a.chatName)}` : ''} · ${esc(fmtMsgTime(a.ts))}</div>` +
     `<div class="ql-tools">` +
-    `${canDownload ? `<button class="ql-dl">⤓ Descargar copia</button>` : ''}` +
+    `${canDownload ? `<button class="ql-dl">${ico('download')}Descargar copia</button>` : ''}` +
     `${a.category === 'pdf' && st === 'ok' ? `<a class="ql-open" href="${src}" target="_blank" rel="noopener">Abrir en pestaña</a>` : ''}` +
     `<span class="ql-pos">${qlIdx + 1} / ${qlList.length}</span></div>`;
   const dlb = cap.querySelector('.ql-dl');
@@ -1061,8 +1251,8 @@ function renderTrash() {
       <div class="detail">${esc(t.detail)}</div>
       <div class="meta">${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}<span class="badge">${esc(statusLabel(t.status))}</span></div>
       <div class="actions">
-        <button class="approve j-restore">↩ Restaurar</button>
-        <button class="dismiss j-purge">Borrar definitivamente</button>
+        <button class="approve j-restore">${ico('undo')}Restaurar</button>
+        <button class="dismiss j-purge">${ico('trash')}Borrar definitivamente</button>
       </div>
     </div>`);
     card.querySelector('.j-restore').onclick = async () => {
@@ -1086,8 +1276,8 @@ function renderTrash() {
       <span class="handle">${esc(c.handle)}</span>
       <span class="rn">${esc(nm)}</span>
       <span class="actions" style="margin-left:auto">
-        <button class="approve j-restore">↩ Restaurar</button>
-        <button class="dismiss j-purge">Borrar definitivamente</button>
+        <button class="approve j-restore">${ico('undo')}Restaurar</button>
+        <button class="dismiss j-purge">${ico('trash')}Borrar definitivamente</button>
       </span>
     </div>`);
     card.querySelector('.j-restore').onclick = async () => {
@@ -1114,7 +1304,7 @@ let currentThreadId = null;
 let chatInited = false;
 
 function bubble(role, text, attachments) {
-  const atts = (attachments || []).map((a) => `<span class="att">📎 ${esc(a.name)}</span>`).join('');
+  const atts = (attachments || []).map((a) => `<span class="att">${ico('clip')}${esc(a.name)}</span>`).join('');
   return el(`<div class="bubble ${role === 'user' ? 'user' : 'bot'}">${atts}${esc(text)}</div>`);
 }
 
@@ -1125,7 +1315,7 @@ async function loadThreads() {
   for (const t of threads) {
     const item = el(`<div class="thread-item ${t.id === currentThreadId ? 'active' : ''}">
       <span class="tt">${esc(t.title)}</span>
-      <button class="del-thread" title="Eliminar conversación">🗑</button>
+      <button class="del-thread" title="Eliminar conversación" aria-label="Eliminar conversación">${ico('trash')}</button>
     </div>`);
     item.querySelector('.tt').onclick = () => openThread(t.id);
     item.querySelector('.del-thread').onclick = async (e) => {
@@ -1155,7 +1345,7 @@ function newThread() {
   showChatView();
   const log = $('#chat-log');
   log.innerHTML = '';
-  log.append(el('<div class="empty">Nueva conversación. Pregúntame sobre tus mensajes, clientes o tareas.</div>'));
+  log.append(el(`<div class="empty">${ico('chat', 'ico-xl')}Nueva conversación. Pregúntame sobre tus mensajes, clientes o tareas.</div>`));
   document.querySelectorAll('.thread-item').forEach((i) => i.classList.remove('active'));
   $('#chat-input').focus();
 }
@@ -1193,7 +1383,7 @@ $('#chat-file').addEventListener('change', (e) => {
   selectedFile = f;
   const chip = $('#chat-file-chip');
   chip.hidden = false;
-  chip.innerHTML = `📎 ${esc(f.name)} <button title="quitar">✕</button>`;
+  chip.innerHTML = `${ico('clip')}${esc(f.name)} <button title="quitar" aria-label="Quitar archivo">${ico('close')}</button>`;
   chip.querySelector('button').onclick = clearFile;
 });
 function fileToBase64(file) {
@@ -1261,14 +1451,14 @@ $('#chat-form').addEventListener('submit', async (e) => {
 function handleChatTools(r, log) {
   const note = (t) => log.append(el(`<div class="empty" style="padding:6px">${t}</div>`));
   const used = r.usedTools || [];
-  if (used.includes('save_memory')) { note('🧠 guardé algo en la memoria'); loadMemory(); }
+  if (used.includes('save_memory')) { note(ico('memory') + ' guardé algo en la memoria'); loadMemory(); }
   if (used.includes('create_task')) {
-    note('✅ creé una tarea en «Por hacer»');
+    note(ico('check') + ' creé una tarea en «Por hacer»');
     loadInbox();
     loadTasks();
     loadStats();
   }
-  if (used.includes('schedule_reminder')) { note('⏰ programé un recordatorio'); loadReminders(); }
+  if (used.includes('schedule_reminder')) { note(ico('clock') + ' programé un recordatorio'); loadReminders(); }
 }
 
 // ---- Scheduled reminders (chat subtab) ----
@@ -1278,15 +1468,15 @@ async function loadReminders() {
   const list = $('#reminders-list');
   list.innerHTML = '';
   if (!rs.length) {
-    list.append(el('<div class="empty">No hay recordatorios. Pídele al asistente «recuérdame mañana…».</div>'));
+    list.append(el(`<div class="empty">${ico('clock', 'ico-xl')}No hay recordatorios. Pídele al asistente «recuérdame mañana…».</div>`));
     return;
   }
   for (const r of rs) {
     const overdue = r.dueAt < Date.now();
     const when = new Date(r.dueAt).toLocaleString('es');
     const card = el(`<div class="card mem-item">
-      <span class="mc"><b>${esc(r.text)}</b><br><span class="muted" style="font-size:12px">${overdue ? '⚠️ ' : ''}${esc(when)}</span></span>
-      <button class="dismiss" title="Cancelar">🗑</button>
+      <span class="mc"><b>${esc(r.text)}</b><br><span class="${overdue ? 'overdue-when' : 'muted'}" style="font-size:12px">${overdue ? ico('warn') + ' ' : ''}${esc(when)}</span></span>
+      <button class="dismiss iconbtn" title="Cancelar" aria-label="Cancelar recordatorio">${ico('trash')}</button>
     </div>`);
     card.querySelector('.dismiss').onclick = async () => {
       await fetch(`/api/agenda/${r.id}`, { method: 'DELETE' });
@@ -1323,20 +1513,20 @@ async function checkDigest() {
     const body = $('#digest-body');
     body.innerHTML = '';
     if (reminders.length) {
-      const sec = el('<div class="dsec"><h4>⏰ Recordatorios</h4></div>');
+      const sec = el(`<div class="dsec"><h4>${ico('clock')}Recordatorios</h4></div>`);
       for (const r of reminders)
         sec.append(el(`<div class="ditem"><div class="dt">${esc(r.text)}</div><div class="dd">${esc(new Date(r.dueAt).toLocaleString('es'))}</div></div>`));
       body.append(sec);
     }
     if (newTasks.length) {
-      const sec = el(`<div class="dsec"><h4>🆕 Tareas propuestas nuevas <span class="dg-count">(${newTasks.length})</span></h4></div>`);
+      const sec = el(`<div class="dsec"><h4>${ico('new')}Tareas propuestas nuevas <span class="dg-count">(${newTasks.length})</span></h4></div>`);
       for (const t of newTasks) {
         const item = el(`<div class="ditem ditem-task">
           <div class="dt">${esc(t.title)}</div>
           ${t.clientHint ? `<div class="dd">cliente: ${esc(displayName(t.clientHint))}</div>` : ''}
           <div class="dactions">
-            <button class="approve j-dg-approve">✓ Aprobar</button>
-            <button class="dismiss j-dg-dismiss">🗑 Descartar</button>
+            <button class="approve j-dg-approve">${ico('check')}Aprobar</button>
+            <button class="dismiss j-dg-dismiss">${ico('trash')}Descartar</button>
           </div>
         </div>`);
         const settle = (label) => {
@@ -1350,12 +1540,12 @@ async function checkDigest() {
         item.querySelector('.j-dg-approve').onclick = async (e) => {
           e.target.disabled = true;
           await setStatus(t.id, 'todo'); // → Tareas (existing endpoint)
-          settle('✓ Aprobada');
+          settle(ico('check') + ' Aprobada');
         };
         item.querySelector('.j-dg-dismiss').onclick = async (e) => {
           e.target.disabled = true;
           await deleteTask(t.id); // → Papelera (existing bulk-delete)
-          settle('🗑 Descartada');
+          settle(ico('trash') + ' Descartada');
         };
         sec.append(item);
       }
@@ -1363,7 +1553,7 @@ async function checkDigest() {
     }
     if (!hasContent) {
       body.append(
-        el('<div class="dsec"><div class="ditem"><div class="dt">Todo al día 🎉</div><div class="dd">No hay tareas nuevas ni recordatorios pendientes. ¡Que tengas un buen día!</div></div></div>'),
+        el(`<div class="dsec"><div class="ditem ditem-clear"><div class="dt">${ico('check')}Todo al día</div><div class="dd">No hay tareas nuevas ni recordatorios pendientes. Que tengas un buen día.</div></div></div>`),
       );
     }
     const ov = $('#digest-overlay');
@@ -1388,13 +1578,13 @@ async function loadMemory() {
   const list = $('#memory-list');
   list.innerHTML = '';
   if (!mems.length) {
-    list.append(el('<div class="empty">El asistente aún no ha guardado nada. Cuéntale algo que deba recordar.</div>'));
+    list.append(el(`<div class="empty">${ico('memory', 'ico-xl')}El asistente aún no ha guardado nada. Cuéntale algo que deba recordar.</div>`));
     return;
   }
   for (const m of mems) {
     const card = el(`<div class="card mem-item">
       <span class="mc">${esc(m.content)}</span>
-      <button class="dismiss">🗑</button>
+      <button class="dismiss iconbtn" title="Olvidar" aria-label="Olvidar este dato">${ico('trash')}</button>
     </div>`);
     card.querySelector('.dismiss').onclick = async () => {
       await fetch(`/api/memory/${m.id}`, { method: 'DELETE' });
@@ -1602,7 +1792,7 @@ async function loadChats() {
           '<li>Asegúrate de que solo haya <b>una copia</b> de la app (p. ej. en Aplicaciones) y de que el permiso esté dado a esa copia.</li>' +
           '</ol>' +
           `<p class="muted">Archivo que intenta leer: <code>${path}</code></p>` +
-          '<button id="chats-retry">Reintentar</button>' +
+          `<button id="chats-retry">${ico('refresh')}Reintentar</button>` +
           '</div>';
         const retry = document.getElementById('chats-retry');
         if (retry) retry.onclick = () => loadChats();
@@ -1733,9 +1923,9 @@ function renderWaCard(st) {
   card.append(body);
 
   if (st.status === 'ready') {
-    body.append(el(`<div class="setrow"><span class="saved">✓ Conectado</span></div>`));
+    body.append(el(`<div class="setrow"><span class="saved">${ico('check')}Conectado</span></div>`));
     const row = el('<div class="setrow"></div>');
-    const bf = el('<button class="primary">Importar historial</button>');
+    const bf = el(`<button class="primary">${ico('import')}Importar historial</button>`);
     const perChatInput = el(
       '<label>últimos <input class="wa-perchat" type="number" value="200" min="10" max="2000" style="width:5em" /> por chat</label>',
     );
@@ -1759,7 +1949,7 @@ function renderWaCard(st) {
       bf.disabled = false;
       loadStats();
     };
-    const pick = el('<button>Elegir chats a incluir</button>');
+    const pick = el(`<button>${ico('message')}Elegir chats a incluir</button>`);
     pick.onclick = () => {
       if (waExpanded.has(id)) {
         waExpanded.delete(id);
@@ -1793,10 +1983,10 @@ function renderWaCard(st) {
     const attempt = st.attempts > 1 ? ` <span class="muted">(intento ${st.attempts})</span>` : '';
     body.append(el(`<div class="hint">conectando… ${d}${attempt}</div>`));
     // A wedged sync that exhausted auto-recovery sets lastError with guidance.
-    if (st.lastError) body.append(el(`<div class="hint err">⚠️ ${esc(st.lastError)}</div>`));
+    if (st.lastError) body.append(el(`<div class="hint err">${ico('warn')} ${esc(st.lastError)}</div>`));
     body.append(waRecoveryRow(id));
   } else {
-    if (st.lastError) body.append(el(`<div class="hint err">⚠️ ${esc(st.lastError)}</div>`));
+    if (st.lastError) body.append(el(`<div class="hint err">${ico('warn')} ${esc(st.lastError)}</div>`));
     const row = el('<div class="setrow"></div>');
     const connect = el(`<button class="primary">${st.hasSession ? 'Reconectar' : 'Conectar / escanear QR'}</button>`);
     connect.onclick = () => waStart(id);
@@ -1809,7 +1999,7 @@ function renderWaCard(st) {
   const foot = el('<div class="setrow wa-foot"></div>');
   const rename = el('<button class="small">Renombrar</button>');
   rename.onclick = () => waRename(id, st.label);
-  const remove = el('<button class="small danger">Quitar cuenta</button>');
+  const remove = el(`<button class="small danger">${ico('trash')}Quitar cuenta</button>`);
   remove.onclick = () => waRemove(id, st.label);
   foot.append(rename, remove);
   card.append(foot);
@@ -1819,9 +2009,9 @@ function renderWaCard(st) {
 
 function waRecoveryRow(id) {
   const row = el('<div class="setrow"></div>');
-  const reset = el('<button>Reconectar</button>');
+  const reset = el(`<button>${ico('refresh')}Reconectar</button>`);
   reset.onclick = () => waReset(id);
-  const repair = el('<button>Volver a vincular</button>');
+  const repair = el(`<button>${ico('phone')}Volver a vincular</button>`);
   repair.onclick = () => waRepair(id);
   row.append(reset, repair);
   return row;
