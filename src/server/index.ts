@@ -7,7 +7,22 @@ import express from 'express';
 import { db } from '../db/index.js';
 import { config } from '../config.js';
 import cron from 'node-cron';
-import { processNewMessages, type ActivityEvent } from '../extract/pipeline.js';
+import {
+  processNewMessages,
+  analyzeSelection,
+  selectionTranscript,
+  SELECTION_MAX_MESSAGES,
+  type ActivityEvent,
+} from '../extract/pipeline.js';
+import {
+  listChatSummaries,
+  pageMessages,
+  searchAllMessages,
+  chatOfMessage,
+  chatStats,
+  tasksForMessages,
+  type BrowseRow,
+} from '../messages/browse.js';
 import { ingestRecentDays, backfillByCount } from '../ingest/imessage/ingest.js';
 import { listChats } from '../ingest/imessage/reader.js';
 import {
@@ -37,6 +52,8 @@ import {
   renameThread,
   listMemories,
   deleteMemory,
+  SEL_OPEN,
+  SEL_CLOSE,
 } from '../chat/store.js';
 import { nameMap } from '../names.js';
 import { purgeStickers } from '../maintenance.js';
@@ -562,7 +579,7 @@ app.post('/api/chat', async (req, res) => {
     res.status(400).json({ error: 'No ANTHROPIC_API_KEY set in .env' });
     return;
   }
-  const body = (req.body as { threadId?: number; message?: string }) ?? {};
+  const body = (req.body as { threadId?: number; message?: string; contextIds?: unknown }) ?? {};
   const message = (body.message ?? '').trim();
   if (!message) {
     res.status(400).json({ error: 'message required' });
@@ -577,7 +594,23 @@ app.post('/api/chat', async (req, res) => {
     } else if (threadMessages(threadId).length === 0) {
       renameThread(threadId, titleFrom(message));
     }
-    const { reply, usedTools } = await runTurn(threadId, message);
+
+    // A selection sent over from the Mensajes tab rides along with the owner's
+    // first message, so the agent sees the transcript and the question together.
+    const ctxIds = Array.isArray(body.contextIds)
+      ? body.contextIds.map(Number).filter((n) => Number.isFinite(n))
+      : [];
+    let composed = message;
+    if (ctxIds.length) {
+      const names = nameMap();
+      const t = selectionTranscript(ctxIds, (h) => names[h] ?? '');
+      if (t.count) {
+        const header = t.chatName ? `${t.count} mensajes de ${t.chatName}` : `${t.count} mensajes`;
+        composed = `${SEL_OPEN}\n${header}\n${t.text}\n${SEL_CLOSE}\n\n${message}`;
+      }
+    }
+
+    const { reply, usedTools } = await runTurn(threadId, composed);
     res.json({ reply, threadId, createdThread, usedTools });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -1171,6 +1204,181 @@ app.get('/api/attachments/locate', (req, res) => {
   res.json({ attachments: out });
 });
 
+// ---------------------------------------------------------------------------
+// Mensajes tab — a chat-style view of what is actually stored, per conversation.
+// ---------------------------------------------------------------------------
+
+/** Decorate a raw browse row's attachment columns with the same availability
+ *  model the Adjuntos gallery uses, so a tile here explains itself identically. */
+function browseAttachments(r: BrowseRow, fda: boolean, names: Record<string, string>) {
+  if (!r.attachment_mimes && !r.attachment_names) return [];
+  const mimes = (r.attachment_mimes || '').split('||');
+  const fnames = (r.attachment_names || '').split('||');
+  const paths = (r.attachment_paths || '').split('||');
+  const out = [];
+  for (let i = 0; i < Math.max(mimes.length, 1); i++) {
+    const mime = mimes[i] || '';
+    const p = paths[i];
+    out.push({
+      id: r.id,
+      i,
+      mime,
+      category: attachmentCategory(mime),
+      filename: fnames[i] || '',
+      ts: r.ts,
+      source: r.source,
+      waAccount: r.waAccount,
+      sender: r.sender,
+      // The Quick-Look caption resolves this the same way the gallery does.
+      senderName: r.sender === 'me' ? null : names[r.sender ?? ''] || r.senderName || null,
+      chatName: r.chatName,
+      hasFile: !!(p && p.trim()),
+      state: attachmentState(r.source, p, fda),
+    });
+  }
+  return out;
+}
+
+/** Shape one message for the browser, resolving names and attachment states. */
+function browseMessage(
+  r: BrowseRow,
+  names: Record<string, string>,
+  fda: boolean,
+  tasks: Map<number, { id: number; title: string }[]>,
+) {
+  return {
+    id: r.id,
+    ts: r.ts,
+    body: r.body,
+    direction: r.direction,
+    source: r.source,
+    waAccount: r.waAccount,
+    sourceMsgId: r.sourceMsgId,
+    chatId: r.chatId,
+    chatName: r.chatName,
+    sender: r.sender,
+    senderName: r.sender === 'me' ? null : names[r.sender ?? ''] || r.senderName || null,
+    processed: !!r.processed,
+    attachments: browseAttachments(r, fda, names),
+    tasks: tasks.get(r.id) ?? [],
+  };
+}
+
+/** Every conversation in the DB, newest first. Intentionally NOT filtered by the
+ *  Ajustes chat selection — see the note in messages/browse.ts — but each chat
+ *  reports whether it is currently included in ingestion. */
+app.get('/api/messages/chats', (_req, res) => {
+  const { filtering, allowed } = includedChats();
+  const allowSet = new Set(allowed);
+  const names = nameMap();
+  const chats = listChatSummaries().map((c) => ({
+    ...c,
+    // Group chats keep their own name; a 1:1 has none, so fall back to the
+    // resolved counterpart (manual name > Contacts > pushname > handle).
+    displayName:
+      c.chatName || names[c.counterpart ?? ''] || c.counterpartName || c.counterpart || 'Sin nombre',
+    included: !filtering || allowSet.has(c.chatId),
+  }));
+  res.json({ chats, filtering });
+});
+
+/** One page of a conversation. See pageMessages() for the cursor semantics. */
+app.get('/api/messages', (req, res) => {
+  const chatId = String(req.query.chatId ?? '');
+  if (!chatId) {
+    res.status(400).json({ error: 'chatId required' });
+    return;
+  }
+  const dirRaw = String(req.query.dir ?? 'older');
+  const dir = dirRaw === 'newer' || dirRaw === 'around' ? dirRaw : 'older';
+  const page = pageMessages({
+    chatId,
+    dir,
+    cursorTs: req.query.cursorTs !== undefined ? Number(req.query.cursorTs) : undefined,
+    cursorId: req.query.cursorId !== undefined ? Number(req.query.cursorId) : undefined,
+    limit: Math.min(Math.max(Number(req.query.limit ?? 100), 1), 300),
+    q: String(req.query.q ?? ''),
+    onlyUnprocessed: req.query.unprocessed === '1',
+    onlyAttachments: req.query.withFiles === '1',
+  });
+
+  const names = nameMap();
+  const fda = hasFda();
+  const tasks = tasksForMessages(page.messages.map((m) => m.id));
+  res.json({
+    messages: page.messages.map((m) => browseMessage(m, names, fda, tasks)),
+    hasOlder: page.hasOlder,
+    hasNewer: page.hasNewer,
+    stats: chatStats(chatId),
+  });
+});
+
+/** Global body search across every conversation (sidebar search). */
+app.get('/api/messages/search', (req, res) => {
+  const q = String(req.query.q ?? '').trim();
+  if (!q) {
+    res.json({ hits: [] });
+    return;
+  }
+  const names = nameMap();
+  const fda = hasFda();
+  const hits = searchAllMessages(q, Math.min(Math.max(Number(req.query.limit ?? 40), 1), 100)).map((r) =>
+    browseMessage(r, names, fda, new Map()),
+  );
+  res.json({ hits });
+});
+
+/** Where a message lives, so a search hit can open its chat anchored on it. */
+app.get('/api/messages/locate', (req, res) => {
+  res.json(chatOfMessage(Number(req.query.id)) ?? { chatId: null, ts: 0 });
+});
+
+/**
+ * Re-check a hand-picked selection and propose tasks from it. A PREVIEW run:
+ * it ignores and never sets `processed`, so this can't quietly drain messages
+ * out of the normal pipeline queue, and the same selection can be re-run.
+ */
+app.post('/api/messages/reanalyze', async (req, res) => {
+  if (!getApiKey()) {
+    res.status(400).json({ error: 'Falta la clave de API de Anthropic (Ajustes).' });
+    return;
+  }
+  const b = (req.body as { ids?: unknown; vision?: boolean }) ?? {};
+  const ids = Array.isArray(b.ids) ? b.ids.map(Number).filter((n) => Number.isFinite(n)) : [];
+  if (ids.length === 0) {
+    res.status(400).json({ error: 'No hay mensajes seleccionados.' });
+    return;
+  }
+  try {
+    const r = await analyzeSelection(ids, { vision: b.vision !== false });
+    res.json({
+      messages: r.messages,
+      filesAnalyzed: r.filesAnalyzed,
+      proposed: r.proposed.map((t) => ({ title: t.title, detail: t.detail, client: t.clientHint })),
+      related: r.related,
+      truncated: ids.length > SELECTION_MAX_MESSAGES,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** Build the transcript for a selection and open it in a NEW chat thread. The
+ *  thread is created empty; the transcript rides along with the owner's first
+ *  message (see contextIds on POST /api/chat) so the agent sees both at once. */
+app.post('/api/messages/to-chat', (req, res) => {
+  const b = (req.body as { ids?: unknown }) ?? {};
+  const ids = Array.isArray(b.ids) ? b.ids.map(Number).filter((n) => Number.isFinite(n)) : [];
+  if (ids.length === 0) {
+    res.status(400).json({ error: 'No hay mensajes seleccionados.' });
+    return;
+  }
+  const names = nameMap();
+  const t = selectionTranscript(ids, (h) => names[h] ?? '');
+  const label = t.chatName ? `${t.count} mensajes de ${t.chatName}` : `${t.count} mensajes`;
+  res.json({ threadId: createThread(label), count: t.count, label, preview: t.text.slice(0, 4000) });
+});
+
 /** One-time backfill: import the most recent N iMessages. */
 app.post('/api/backfill', (req, res) => {
   const count = Math.min(Math.max(Number((req.body as { count?: number })?.count ?? 1000), 1), 50000);
@@ -1242,7 +1450,11 @@ function applySchedule(): void {
     console.log(`[cron] ${new Date().toISOString()} daily ingest + process`);
     try {
       ingestSafely();
-      const r = await processNewMessages({ vision: true, visionCap: 20, maxBatches: 50 });
+      // The vision budget is shared across ALL batches of the run, and this run
+      // can cover up to 50 × 120 = 6,000 messages. At the old cap of 20 a busy
+      // night's photos went undescribed — and the rows were then marked
+      // processed, so that signal never came back. 200 still bounds the cost.
+      const r = await processNewMessages({ vision: true, visionCap: 200, maxBatches: 50 });
       console.log(`[cron] processed ${r.processed}, proposed ${r.proposed}, remaining ${r.remaining}`);
     } catch (err) {
       console.error('[cron] ingest/process failed:', err instanceof Error ? err.message : err);

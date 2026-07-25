@@ -95,6 +95,7 @@
           <button class="tab" data-tab="trash"><svg class="ico"><use href="#i-trash" /></svg>Papelera <span id="trash-pill" class="pill">0</span></button>
           <button class="tab" data-tab="clients"><svg class="ico"><use href="#i-clients" /></svg>Clientes</button>
           <button class="tab" data-tab="attachments"><svg class="ico"><use href="#i-clip" /></svg>Adjuntos</button>
+          <button class="tab" data-tab="messages"><svg class="ico"><use href="#i-message" /></svg>Mensajes</button>
           <button class="tab" data-tab="chat"><svg class="ico"><use href="#i-chat" /></svg>Chat</button>
           <button class="tab" data-tab="pipeline"><svg class="ico"><use href="#i-process" /></svg>Proceso</button>
           <button class="tab" data-tab="help"><svg class="ico"><use href="#i-help" /></svg>Ayuda</button>
@@ -222,6 +223,51 @@
         </div>
       </section>
 
+      <!-- MENSAJES -->
+      <section id="messages" class="panel">
+        <p class="hint">
+          Los mensajes tal como están guardados en la base de datos de la app, conversación por conversación.
+          Sirve para comprobar qué se importó de verdad. Selecciona mensajes para volver a analizarlos o para
+          comentarlos con el asistente.
+        </p>
+        <div class="msg-layout">
+          <aside class="msg-side">
+            <input class="search" id="msg-search" placeholder="Buscar conversación o texto…" autocomplete="off" />
+            <div id="msg-chats" class="msg-chats"></div>
+          </aside>
+          <div class="msg-main">
+            <div class="msg-head">
+              <div class="msg-head-row">
+                <strong id="msg-title">Elige una conversación</strong>
+                <span id="msg-stats" class="msg-stats"></span>
+              </div>
+              <div class="msg-tools" id="msg-tools" hidden>
+                <input class="search" id="msg-find" placeholder="Buscar en esta conversación…" autocomplete="off" />
+                <button class="chip" id="msg-f-unproc" aria-pressed="false">Sin procesar</button>
+                <button class="chip" id="msg-f-files" aria-pressed="false">Con adjuntos</button>
+                <label class="msg-jump" title="Ir a una fecha">
+                  <svg class="ico"><use href="#i-calendar" /></svg>
+                  <input type="date" id="msg-date" />
+                </label>
+              </div>
+            </div>
+            <div id="msg-thread" class="msg-thread">
+              <div class="msg-empty">Elige una conversación de la izquierda.</div>
+            </div>
+            <div id="msg-bar" class="msg-bar" hidden>
+              <span id="msg-selcount" class="msg-selcount"></span>
+              <label class="msg-visopt" id="msg-visopt">
+                <input type="checkbox" id="msg-vision" checked />
+                <span id="msg-vislabel">analizar archivos</span>
+              </label>
+              <button id="msg-analyze" class="primary"><svg class="ico"><use href="#i-spark" /></svg>Analizar</button>
+              <button id="msg-tochat"><svg class="ico"><use href="#i-chat" /></svg>Enviar al Chat</button>
+              <button id="msg-clear"><svg class="ico"><use href="#i-close" /></svg>Limpiar</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- CHAT -->
       <section id="chat" class="panel">
         <div class="chat-layout">
@@ -233,6 +279,7 @@
           </aside>
           <div class="chat-main">
             <div id="chat-log" class="chat-log"></div>
+            <div id="chat-sel-chip" class="sel-chip" hidden></div>
             <span id="chat-file-chip" class="file-chip" hidden></span>
             <form id="chat-form" class="chat-form">
               <label class="attach-btn" title="Adjuntar imagen o PDF">
@@ -337,7 +384,20 @@
             <li><b>Todavía no lo has procesado.</b> Guardar un mensaje y analizarlo son dos pasos. Pulsa <b>Procesar mensajes nuevos</b>: al empezar por los más recientes, lo que acabas de enviar o recibir entra en esa misma pasada.</li>
           </ol>
 
-          <h2>5. Rutina recomendada</h2>
+          <h2>5. La pestaña “Mensajes”</h2>
+          <p>Muestra tus conversaciones tal como quedaron guardadas en la app, con el mismo aspecto que WhatsApp o iMessage. Sirve para comprobar de un vistazo <b>qué se importó de verdad</b> de cada chat y qué falta.</p>
+          <ul>
+            <li>A la izquierda están todas las conversaciones con su número de mensajes, cuántos quedan <b>sin procesar</b> y cuántos tienen archivos. Aparecen <b>todas</b>, incluso las que no están incluidas en Ajustes: esas llevan la marca “no se importa”.</li>
+            <li>El buscador de la izquierda encuentra tanto conversaciones como texto dentro de los mensajes. Al pulsar un resultado te lleva a ese mensaje exacto.</li>
+            <li>Dentro de una conversación puedes buscar texto, filtrar por <b>sin procesar</b> o <b>con adjuntos</b>, y saltar a una fecha concreta con el calendario.</li>
+          </ul>
+          <p>Puedes <b>seleccionar mensajes</b> (marca la casilla; con Mayúsculas seleccionas un rango, y pulsando la fecha seleccionas el día entero, hasta 200) y luego:</p>
+          <ul>
+            <li><b>Analizar</b> — los vuelve a pasar por la IA y las tareas que salgan aparecen en <b>Bandeja</b>. Es seguro repetirlo: no cambia si el mensaje estaba analizado o no. Si no propone nada, casi siempre es porque ya tienes una tarea abierta que lo cubre, y te la muestra.</li>
+            <li><b>Enviar al Chat</b> — abre una conversación nueva con el asistente llevándose esos mensajes, para que le preguntes sobre ellos o le pidas crear una tarea.</li>
+          </ul>
+
+          <h2>6. Rutina recomendada</h2>
           <ul>
             <li><b>Día a día:</b> deja la app abierta. WhatsApp se captura solo; pulsa <b>Procesar mensajes nuevos</b> cuando quieras revisar tareas nuevas.</li>
             <li><b>Puesta al día grande:</b> <b>Importar historial</b> con un número alto y luego <b>Procesar</b>. Lo reciente sale enseguida; para el historial antiguo, vuelve a pulsar Procesar de vez en cuando (o deja que el proceso diario lo vacíe solo).</li>

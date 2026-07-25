@@ -37,7 +37,19 @@ We moved past "feature-complete" into adding features, with proper infra:
   was removed (Trash supersedes it).
 - **Tool-using chat agent** (`src/chat/index.ts` runTurn): Haiku loop with save_memory /
   create_task / schedule_reminder tools; context includes current datetime + capped memory.
-- **Current version 0.3.0** (shell still 0.1.x; all updates ship online via GitHub Releases,
+- **Mensajes tab (1.7.0)** — the DB rendered as chat history, for seeing what actually got
+  imported. Two panes: every conversation (including ones *excluded* in Ajustes, badged "no
+  se importa" — hiding them would defeat the purpose) and a WhatsApp-style thread with
+  bidirectional cursor paging, jump-to-date, in-chat + global search, inline attachments, and
+  per-message technical details. Select up to 200 messages (shift-click ranges, click a date
+  to take the day) and either **Analizar** them (a preview run that never touches the
+  `processed` flag, so it can't drain the pipeline queue and is repeatable) or **Enviar al
+  Chat** (opens a new thread carrying the transcript, which rides along with the first
+  question). Also fixed two real data-loss bugs found while building it: vision described
+  only the *first* attachment per message, and the nightly cron's vision cap of 20 covered up
+  to 6,000 messages — undescribed files were lost for good, since the row is marked processed
+  regardless.
+- **Current version 1.7.0** (shell still 0.1.x; all updates ship online via GitHub Releases,
   minShellVersion 0.1.0 since no new deps). Bump version + `MIN_SHELL_VERSION=0.1.0 npm run
   release -- "notas"` to publish; Dad clicks "Buscar actualizaciones".
 
