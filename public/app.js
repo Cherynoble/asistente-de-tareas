@@ -1012,14 +1012,25 @@ function attWho(a) {
 }
 
 // The actual media element for a downloaded/available attachment.
+// "lista-de-precios.xlsx" → "XLSX". A generic tile that just says "archivo"
+// repeats the filename underneath it and tells you nothing.
+function attExt(a) {
+  const m = /\.([a-z0-9]{2,5})$/i.exec(a.filename || '');
+  return m ? m[1].toUpperCase() : 'Archivo';
+}
+
 function attMediaHtml(a, src) {
   const label = esc(a.filename || a.category || 'archivo');
   if (a.category === 'image') return `<img class="att-thumb" loading="lazy" src="${src}" alt="${label}" />`;
   if (a.category === 'video') return `<video class="att-thumb" controls preload="metadata" src="${src}"></video>`;
   if (a.category === 'pdf')
-    return `<a class="att-thumb att-icon" href="${src}" target="_blank" rel="noopener">${ico('pdf', 'ico-xl')}<span>PDF</span></a>`;
-  if (a.category === 'audio') return `<audio controls preload="none" src="${src}"></audio>`;
-  return `<div class="att-thumb att-icon">${ico('file', 'ico-xl')}<span>archivo</span></div>`;
+    return `<a class="att-thumb att-icon att-file att-pdf" href="${src}" target="_blank" rel="noopener">${ico('pdf', 'ico-xl')}<span>PDF</span></a>`;
+  // Chromium drops the <audio> timeline below ~200px, so a tile-width player has
+  // no scrubber and no duration — unusable. The tile is the affordance; clicking
+  // it opens the preview overlay, which plays the file full size on its own.
+  if (a.category === 'audio')
+    return `<div class="att-thumb att-icon att-file att-audio">${ico('audio', 'ico-xl')}<span>Audio</span></div>`;
+  return `<div class="att-thumb att-icon att-file">${ico('file', 'ico-xl')}<span>${esc(attExt(a))}</span></div>`;
 }
 
 // When an <img>/<video> in a card fails to load, replace it with a placeholder.
@@ -1040,10 +1051,10 @@ function attCard(a, list, idx) {
   let media;
   if (st === 'ok') media = attMediaHtml(a, src);
   else if (st === 'fetch')
-    media = `<div class="att-thumb att-icon att-unavail"><button class="att-load">${ico('download')}ver archivo</button><span>de WhatsApp</span></div>`;
+    media = `<div class="att-thumb att-icon att-unavail att-fetch"><button class="att-load">${ico('download')}Ver archivo</button><span>guardado en WhatsApp</span></div>`;
   else if (st === 'fda')
     media = `<div class="att-thumb att-icon att-unavail">${ico('lock', 'ico-xl')}<span>Activa Acceso total al disco</span></div>`;
-  else media = `<div class="att-thumb att-icon att-unavail">${ico('ban', 'ico-xl')}<span>no está en este Mac</span></div>`;
+  else media = `<div class="att-thumb att-icon att-unavail">${ico('ban', 'ico-xl')}<span>No está en este Mac</span></div>`;
   const name = a.filename || a.category;
   // Download only makes sense when the file is (or can be) fetched.
   const canDownload = st === 'ok' || st === 'fetch';
@@ -1128,7 +1139,8 @@ let qlIdx = 0;
 function qlOkMedia(a, src) {
   if (a.category === 'image') return `<img class="ql-media" src="${src}" alt="" />`;
   if (a.category === 'video') return `<video class="ql-media" controls autoplay src="${src}"></video>`;
-  if (a.category === 'audio') return `<audio class="ql-audio" controls autoplay src="${src}"></audio>`;
+  if (a.category === 'audio')
+    return `<div class="ql-audiobox">${ico('audio', 'ico-xl')}<audio class="ql-audio" controls autoplay src="${src}"></audio></div>`;
   if (a.category === 'pdf') return `<iframe class="ql-frame" src="${src}"></iframe>`;
   return `<div class="ql-note">${ico('file', 'ico-xl')}<div>Este tipo de archivo no se puede previsualizar. Usa “Descargar copia”.</div></div>`;
 }

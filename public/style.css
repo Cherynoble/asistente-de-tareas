@@ -994,7 +994,15 @@ label.check, .selall { display: inline-flex; align-items: center; gap: 7px; curs
   height: 146px;
   overflow: hidden;
 }
+/* Absolute, not a flex item. As flex children these get re-sized from their own
+   intrinsic aspect ratio against the tile's definite height, so portrait media
+   (a phone video or photo) ends up in a narrow strip with gaps either side —
+   and for <video> Chrome then widens it again to its minimum control-bar width,
+   which is why only some tiles looked wrong. Out of flow, the box is exactly
+   the tile and object-fit does the cropping. */
 .att-media img.att-thumb, .att-media video.att-thumb {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -1003,28 +1011,49 @@ label.check, .selall { display: inline-flex; align-items: center; gap: 7px; curs
 }
 .att-card:hover .att-media img.att-thumb { transform: scale(1.05); }
 .att-media audio { width: 100%; padding: 0 var(--s-2); }
+
+/* Non-image tiles. These carried almost no surface of their own, so next to a
+   photo they read as an empty or failed tile rather than a file. */
 .att-icon {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--s-2);
   width: 100%;
   height: 100%;
-  color: var(--faint);
+  padding: var(--s-3);
+  text-align: center;
+  color: var(--muted);
   text-decoration: none;
 }
-.att-icon span { font-size: var(--fs-2xs); font-weight: 620; letter-spacing: 0.04em; }
-.att-unavail { padding: var(--s-2); text-align: center; }
-.att-unavail span { font-size: 10.5px; line-height: 1.35; color: var(--muted); }
-.att-load { font-size: var(--fs-2xs); padding: 5px 10px; min-height: 27px; margin-bottom: 2px; }
-.att-expand {
+.att-icon .ico-xl { width: 31px; height: 31px; }
+.att-icon span { font-size: var(--fs-2xs); font-weight: 620; letter-spacing: 0.05em; line-height: 1.35; }
+
+/* A file, typed by colour. */
+.att-file { background: color-mix(in oklab, var(--ink) 6%, transparent); }
+.att-file .ico-xl { color: inherit; }
+.att-file span { color: var(--muted); }
+.att-file.att-pdf { color: var(--red); background: var(--red-wash); }
+.att-file.att-audio { color: var(--accent); background: var(--accent-wash); }
+
+/* Not a file type — a state. Deliberately neutral so it never reads as a
+   category, and never competes with a real thumbnail next to it. */
+.att-unavail { background: color-mix(in oklab, var(--ink) 4%, transparent); color: var(--faint); }
+.att-unavail span { font-size: 11px; font-weight: 500; letter-spacing: 0; color: var(--muted); }
+.att-fetch { color: var(--accent); }
+.att-load { font-size: var(--fs-2xs); padding: 5px 11px; min-height: 28px; }
+/* Descendant selector on purpose: `button:not(.tab)` is (0,1,1) and sets
+   position:relative for its hover sweep, which outranks a bare `.att-expand`
+   (0,1,0). Losing `position:absolute` left this button in the flex flow, where
+   it stole 28px from the thumbnail and centred itself in the tile. */
+.att-media .att-expand {
   position: absolute;
   top: 7px;
   left: 7px;
   width: 28px;
   height: 28px;
-  min-height: 28px;
+  min-height: 0;
   padding: 0;
   border-radius: var(--r-xs);
   background: var(--glass-strong);
@@ -1103,7 +1132,23 @@ label.check, .selall { display: inline-flex; align-items: center; gap: 7px; curs
 .ql-stage > * { animation: stage-in var(--t-mid) var(--e-expo) both; }
 .ql-media { max-width: 86vw; max-height: 82vh; object-fit: contain; border-radius: var(--r-sm); box-shadow: 0 20px 70px oklch(0 0 0 / 0.55); }
 .ql-frame { width: 86vw; height: 82vh; border: none; background: #fff; border-radius: var(--r-sm); }
-.ql-audio { width: min(60vw, 520px); }
+/* A bare native audio bar floating on the backdrop looks like a rendering
+   glitch; give it a panel with the same glass vocabulary as everything else. */
+.ql-audiobox {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-6) var(--s-6) var(--s-5);
+  border-radius: var(--r-xl);
+  background: oklch(1 0 0 / 0.1);
+  border: 1px solid oklch(1 0 0 / 0.14);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-3);
+}
+.ql-audiobox .ico-xl { width: 46px; height: 46px; color: oklch(0.92 0.02 250); opacity: 0.8; }
+.ql-audio { width: min(60vw, 460px); }
 .ql-note {
   color: oklch(0.98 0 0);
   display: flex;
