@@ -1355,6 +1355,9 @@ app.post('/api/messages/reanalyze', async (req, res) => {
       messages: r.messages,
       filesAnalyzed: r.filesAnalyzed,
       proposed: r.proposed.map((t) => ({ title: t.title, detail: t.detail, client: t.clientHint })),
+      // Proposals the deterministic dedup refused — shown so a repeat run reads
+      // as "already exists: X", never as a silent nothing.
+      duplicates: r.duplicates.map((s) => ({ title: s.existingTitle, state: s.existingState })),
       related: r.related,
       truncated: ids.length > SELECTION_MAX_MESSAGES,
     });

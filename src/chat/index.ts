@@ -6,6 +6,7 @@ import { nameMap } from '../names.js';
 import { addMessage, threadMessages, listMemories, saveMemory } from './store.js';
 import { scheduleReminder } from '../notify/scheduled.js';
 import { describeAttachment } from '../extract/vision.js';
+import { normTitle } from '../extract/pipeline.js';
 import { downloadWaMedia } from '../ingest/whatsapp/client.js';
 
 export interface ChatMsg {
@@ -304,6 +305,20 @@ async function execTool(name: string, input: unknown, threadId: number): Promise
     const i = (input as { title?: string; detail?: string; client?: string }) ?? {};
     const title = (i.title ?? '').trim();
     if (!title) return 'Falta el título de la tarea.';
+    // Same deterministic guard as the extraction pipeline: an open task with
+    // the same normalized title already exists → report it instead of creating
+    // a twin (the model retrying a tool call, or the owner asking twice, must
+    // not stack duplicates). The owner can still force one by wording the
+    // title differently — which also makes the two distinguishable in the UI.
+    const twin = (
+      db()
+        .prepare(
+          `SELECT title, status FROM tasks
+           WHERE status IN ('proposed','todo','waiting') AND archived_at IS NULL AND deleted_at IS NULL`,
+        )
+        .all() as { title: string; status: string }[]
+    ).find((t) => normTitle(t.title) === normTitle(title));
+    if (twin) return `Ya existe una tarea abierta con ese título: "${twin.title}" (${twin.status}). No se creó un duplicado.`;
     const now = Date.now();
     db()
       .prepare(

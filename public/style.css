@@ -1406,7 +1406,11 @@ label.check, .selall { display: inline-flex; align-items: center; gap: 7px; curs
 /* ── 12a. Mensajes (message browser) ─────────────────────────────────────── */
 .msg-layout { display: flex; gap: var(--s-4); align-items: stretch; }
 .msg-side { width: 268px; flex: none; display: flex; flex-direction: column; gap: var(--s-2); min-width: 0; }
-.msg-side .search { width: 100%; }
+/* flex:none — the shared input.search rule sets flex:1 for HORIZONTAL toolbars,
+   but this column is stretched to the thread's height, so here flex-grow makes
+   the input balloon vertically whenever the list below is short (e.g. a search
+   with few hits). */
+.msg-side .search { width: 100%; flex: none; }
 .msg-chats {
   display: flex;
   flex-direction: column;

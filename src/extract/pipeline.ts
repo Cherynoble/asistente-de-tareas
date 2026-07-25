@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { db } from '../db/index.js';
+import { SEL_CLOSE, SEL_OPEN } from '../chat/store.js';
 import { ClaudeExtractor } from './claude.js';
 import { describeAttachment } from './vision.js';
 import type { ClientContext, ExistingTask, IngestedMessage, ProposedTask } from './types.js';
@@ -65,10 +66,12 @@ const ROW_COLS = `id, chat_name AS chatName, sender, sender_name AS senderName, 
                   attachment_mimes, attachment_names, attachment_paths`;
 
 function loadOpenTasks(): ExistingTask[] {
+  // deleted_at IS NULL: a task in the Papelera is not "already open" — telling
+  // the model it is would silently suppress legitimate new proposals.
   return db()
     .prepare(
       `SELECT title, client_hint AS clientHint FROM tasks
-       WHERE status IN ('proposed','todo','waiting') AND archived_at IS NULL`,
+       WHERE status IN ('proposed','todo','waiting') AND archived_at IS NULL AND deleted_at IS NULL`,
     )
     .all() as ExistingTask[];
 }
@@ -79,18 +82,93 @@ function loadClients(): ClientContext[] {
     .all() as ClientContext[];
 }
 
-function saveTasks(tasks: ProposedTask[]): void {
+/** A proposal the deterministic dedup refused to insert, with the task it
+ *  collided with — surfaced to the UI so "nothing new" reads as "already
+ *  exists: X", not as a silent no-op. */
+export interface SkippedDuplicate {
+  title: string;
+  existingId: number;
+  existingTitle: string;
+  /** Canonical status, or 'archived' / 'trash' when the twin is no longer active. */
+  existingState: string;
+}
+
+/** Accent-, case- and punctuation-insensitive form of a title, for duplicate
+ *  detection ("Enviar diagnóstico." ≡ "enviar diagnostico"). Also used by the
+ *  chat agent's create_task tool, so every task-creating path shares one
+ *  definition of "the same task". */
+export function normTitle(t: string): string {
+  return t
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+/**
+ * Insert proposals, MINUS deterministic duplicates. The extractor is told not to
+ * re-propose open tasks, but that guard is probabilistic — over repeated runs it
+ * eventually slips (observed: the third "Analizar" of the same selection
+ * re-created a task the first two runs had correctly declined). This layer is
+ * the guaranteed backstop, and because it lives here it covers every save path:
+ * Analizar, the Proceso tab, and the nightly cron.
+ *
+ * Two rules, checked at insert time (better-sqlite3 is synchronous, so
+ * overlapping runs can't interleave between check and insert):
+ *  1. An OPEN task (proposed/todo/waiting, not archived/trashed) with the same
+ *     normalized title already exists → skip. Done tasks don't block: a client
+ *     re-requesting something finished is a genuinely new task.
+ *  2. A task in ANY state citing the same source message with the same
+ *     normalized title → skip. Re-analyzing a message must not resurrect a task
+ *     the owner already completed, archived or trashed.
+ */
+export function saveTasks(tasks: ProposedTask[]): { saved: ProposedTask[]; duplicates: SkippedDuplicate[] } {
+  const saved: ProposedTask[] = [];
+  const duplicates: SkippedDuplicate[] = [];
+  if (tasks.length === 0) return { saved, duplicates };
+
   const d = db();
   const now = Date.now();
   const insert = d.prepare(
     `INSERT INTO tasks (title, detail, status, client_hint, source_message_id, source_quote, created_at, updated_at)
      VALUES (?, ?, 'proposed', ?, ?, ?, ?, ?)`,
   );
+  const selectOpen = d.prepare(
+    `SELECT id, title, status FROM tasks
+     WHERE status IN ('proposed','todo','waiting') AND archived_at IS NULL AND deleted_at IS NULL`,
+  );
+  const selectBySource = d.prepare(
+    `SELECT id, title, status, archived_at, deleted_at FROM tasks WHERE source_message_id = ?`,
+  );
+  type Twin = { id: number; title: string; status: string; archived_at?: number | null; deleted_at?: number | null };
+  const stateOf = (e: Twin) => (e.deleted_at ? 'trash' : e.archived_at ? 'archived' : e.status);
+
   d.transaction(() => {
+    // Loaded inside the transaction, and updated per insert so rule 1 also
+    // dedups within a single model response.
+    const openByTitle = new Map<string, Twin>();
+    for (const e of selectOpen.all() as Twin[]) {
+      const k = normTitle(e.title);
+      if (k && !openByTitle.has(k)) openByTitle.set(k, e);
+    }
     for (const t of tasks) {
-      insert.run(t.title, t.detail, t.clientHint ?? '', t.sourceMessageId, t.sourceQuote ?? '', now, now);
+      const key = normTitle(t.title);
+      const twin =
+        (key && openByTitle.get(key)) ||
+        (t.sourceMessageId != null
+          ? (selectBySource.all(t.sourceMessageId) as Twin[]).find((e) => normTitle(e.title) === key)
+          : undefined);
+      if (twin) {
+        duplicates.push({ title: t.title, existingId: twin.id, existingTitle: twin.title, existingState: stateOf(twin) });
+        continue;
+      }
+      const info = insert.run(t.title, t.detail, t.clientHint ?? '', t.sourceMessageId, t.sourceQuote ?? '', now, now);
+      saved.push(t);
+      if (key) openByTitle.set(key, { id: Number(info.lastInsertRowid), title: t.title, status: 'proposed' });
     }
   })();
+  return { saved, duplicates };
 }
 
 /** Attachments the UI can preview via /api/attachment. */
@@ -226,9 +304,9 @@ export async function runExtraction(opts: ExtractionOptions = {}): Promise<{ pro
 
   const extractor = new ClaudeExtractor();
   const tasks = await extractor.proposeTasks(toMessages(rows), loadClients(), loadOpenTasks());
-  saveTasks(tasks);
+  const { saved } = saveTasks(tasks);
 
-  for (const t of tasks) {
+  for (const t of saved) {
     emit({
       type: 'task',
       title: t.title,
@@ -238,8 +316,8 @@ export async function runExtraction(opts: ExtractionOptions = {}): Promise<{ pro
       sourceMessageId: t.sourceMessageId,
     });
   }
-  emit({ type: 'done', proposed: tasks.length });
-  return { proposed: tasks.length };
+  emit({ type: 'done', proposed: saved.length });
+  return { proposed: saved.length };
 }
 
 export interface ProcessOptions {
@@ -314,8 +392,8 @@ export async function processNewMessages(opts: ProcessOptions = {}): Promise<{
       }
 
       const tasks = await extractor.proposeTasks(toMessages(rows), loadClients(), loadOpenTasks());
-      saveTasks(tasks);
-      for (const t of tasks) {
+      const { saved } = saveTasks(tasks);
+      for (const t of saved) {
         emit({
           type: 'task',
           title: t.title,
@@ -331,7 +409,7 @@ export async function processNewMessages(opts: ProcessOptions = {}): Promise<{
       })();
 
       processed += rows.length;
-      proposed += tasks.length;
+      proposed += saved.length;
       emit({ type: 'batch', processed, total, proposed });
     }
 
@@ -353,6 +431,9 @@ export interface SelectionAnalysis {
   messages: number;
   filesAnalyzed: number;
   proposed: ProposedTask[];
+  /** Proposals the deterministic dedup refused because their twin already
+   *  exists — the exact answer to "why did nothing new appear?". */
+  duplicates: SkippedDuplicate[];
   /** Open tasks already tied to this conversation — shown when nothing new was
    *  proposed, so a zero result reads as "already covered" rather than "broken".
    *  A relatedness heuristic (same source message or client), NOT the extractor's
@@ -373,43 +454,48 @@ export async function analyzeSelection(
   opts: { vision?: boolean; visionCap?: number } = {},
 ): Promise<SelectionAnalysis> {
   const picked = [...new Set(ids.filter((n) => Number.isFinite(n)))].slice(0, SELECTION_MAX_MESSAGES);
-  if (picked.length === 0) return { messages: 0, filesAnalyzed: 0, proposed: [], related: [] };
+  if (picked.length === 0) return { messages: 0, filesAnalyzed: 0, proposed: [], duplicates: [], related: [] };
 
   const d = db();
   const placeholders = picked.map(() => '?').join(',');
   const rows = d
     .prepare(`SELECT ${ROW_COLS} FROM messages WHERE id IN (${placeholders}) ORDER BY ts ASC`)
     .all(...picked) as Row[];
-  if (rows.length === 0) return { messages: 0, filesAnalyzed: 0, proposed: [], related: [] };
+  if (rows.length === 0) return { messages: 0, filesAnalyzed: 0, proposed: [], duplicates: [], related: [] };
 
   const cap = Math.min(Math.max(opts.visionCap ?? SELECTION_MAX_FILES, 0), SELECTION_MAX_FILES);
   const filesAnalyzed = opts.vision === false ? 0 : await enrichVision(rows, cap, () => {});
 
   const extractor = new ClaudeExtractor();
-  const proposed = await extractor.proposeTasks(toMessages(rows), loadClients(), loadOpenTasks());
-  saveTasks(proposed);
+  const { saved, duplicates } = saveTasks(
+    await extractor.proposeTasks(toMessages(rows), loadClients(), loadOpenTasks()),
+  );
 
-  // Relatedness by the same handles/chats the selection came from.
+  // Relatedness by the same source messages or the same handles/chats the
+  // selection came from. The source-message leg applies even when no hint
+  // resolved (e.g. a chat of only outgoing messages).
   const hints = [
     ...new Set(
       rows.flatMap((r) => [r.sender, r.chatName].filter((s): s is string => !!s && s !== 'me')),
     ),
   ];
-  const related =
-    hints.length === 0
-      ? []
-      : (d
-          .prepare(
-            `SELECT id, title, status FROM tasks
-             WHERE status IN ('proposed','todo','waiting')
-               AND archived_at IS NULL AND deleted_at IS NULL
-               AND (source_message_id IN (${placeholders})
-                    OR client_hint IN (${hints.map(() => '?').join(',')}))
-             ORDER BY updated_at DESC LIMIT 10`,
-          )
-          .all(...picked, ...hints) as { id: number; title: string; status: string }[]);
+  const conds = [`source_message_id IN (${placeholders})`];
+  const params: unknown[] = [...picked];
+  if (hints.length > 0) {
+    conds.push(`client_hint IN (${hints.map(() => '?').join(',')})`);
+    params.push(...hints);
+  }
+  const related = d
+    .prepare(
+      `SELECT id, title, status FROM tasks
+       WHERE status IN ('proposed','todo','waiting')
+         AND archived_at IS NULL AND deleted_at IS NULL
+         AND (${conds.join(' OR ')})
+       ORDER BY updated_at DESC LIMIT 10`,
+    )
+    .all(...params) as { id: number; title: string; status: string }[];
 
-  return { messages: rows.length, filesAnalyzed, proposed, related };
+  return { messages: rows.length, filesAnalyzed, proposed: saved, duplicates, related };
 }
 
 /** Render a selection as a plain-text transcript for the chat agent. Kept here
@@ -433,7 +519,11 @@ export function selectionTranscript(ids: number[], resolveName: (handle: string)
     });
     const who = r.direction === 'outgoing' ? 'Yo' : resolveName(r.sender ?? '') || r.senderName || r.sender || '?';
     const files = r.attachment_names ? ` [archivos: ${r.attachment_names.split('||').filter(Boolean).join(', ')}]` : '';
-    return `[${when}] ${who}: ${r.body || '(sin texto)'}${files}`;
+    // A body containing the literal selection sentinels would terminate the
+    // collapsed block early in the chat UI, spilling the rest of the transcript
+    // into the visible bubble. Message bodies are untrusted text; strip them.
+    const body = (r.body || '(sin texto)').replaceAll(SEL_OPEN, '').replaceAll(SEL_CLOSE, '');
+    return `[${when}] ${who}: ${body}${files}`;
   });
 
   return {

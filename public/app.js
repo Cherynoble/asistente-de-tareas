@@ -56,7 +56,7 @@ const fmtMsgTime = (ms) =>
     : '';
 
 // Spanish labels for task statuses and WhatsApp connection states.
-const STATUS_LABELS = { proposed: 'propuesta', todo: 'por hacer', waiting: 'en espera', done: 'hecho', dismissed: 'descartada' };
+const STATUS_LABELS = { proposed: 'propuesta', todo: 'por hacer', waiting: 'en espera', done: 'hecho', dismissed: 'descartada', archived: 'archivada', trash: 'en la papelera' };
 const statusLabel = (s) => STATUS_LABELS[s] || s;
 const WA_LABELS = {
   idle: 'inactivo', starting: 'iniciando', qr: 'código QR', authenticated: 'autenticado',
@@ -1290,13 +1290,18 @@ async function loadMsgChats() {
   renderMsgSide();
 }
 
+let msgSearchSeq = 0;
 async function runMsgSearch(q) {
+  const seq = ++msgSearchSeq;
   if (!q || q.trim().length < 2) {
     msgHits = [];
     renderMsgSide();
     return;
   }
   const r = await (await fetch(`/api/messages/search?q=${encodeURIComponent(q.trim())}&limit=40`)).json();
+  // A slower response for an earlier query must not overwrite the results of
+  // the query the user actually typed last.
+  if (seq !== msgSearchSeq) return;
   msgHits = r.hits || [];
   renderMsgSide();
 }
@@ -1396,6 +1401,9 @@ async function openMsgChat(chatId, anchorTs) {
     renderMsgStats(r.stats);
     renderMsgThread(msgAnchorId || msgAnchorTs ? 'anchor' : 'bottom');
     renderMsgSelection();
+  } catch (err) {
+    // Without this a failed fetch leaves "Cargando…" on screen forever.
+    $('#msg-thread').innerHTML = `<div class="msg-empty">No se pudo cargar la conversación. ${esc(String(err))}</div>`;
   } finally {
     msgLoading = false;
   }
@@ -1695,6 +1703,16 @@ async function msgAnalyze() {
       r.messages > 1 ? 's' : ''
     }${r.filesAnalyzed ? `, ${r.filesAnalyzed} archivo${r.filesAnalyzed > 1 ? 's' : ''} leído${r.filesAnalyzed > 1 ? 's' : ''}` : ''}.</p>`;
 
+    // Proposals the server refused because their twin already exists — the
+    // deterministic dedup that keeps a repeated "Analizar" from re-creating
+    // the same task on the run where the model's own judgment slips.
+    const dups = r.duplicates || [];
+    const dupList = dups.length
+      ? `<ul class="msg-proposed">` +
+        dups.map((t) => `<li><b>${esc(t.title)}</b> <span class="msg-flag">${esc(statusLabel(t.state))}</span></li>`).join('') +
+        `</ul>`
+      : '';
+
     let body;
     if (r.proposed.length) {
       body =
@@ -1710,7 +1728,17 @@ async function msgAnalyze() {
               }</li>`,
           )
           .join('') +
-        `</ul>`;
+        `</ul>` +
+        (dups.length
+          ? `<p class="hint">Omitida${dups.length > 1 ? 's' : ''} por duplicado (ya existe${dups.length > 1 ? 'n' : ''}):</p>` + dupList
+          : '');
+    } else if (dups.length) {
+      // The model proposed something, but each proposal already exists — say
+      // exactly which, so a repeat analysis reads as confirmation, not failure.
+      body =
+        head +
+        `<p>No se creó ninguna tarea nueva: lo que piden estos mensajes <b>ya existe</b>:</p>` +
+        dupList;
     } else {
       // A zero here almost always means "already covered", not "nothing found":
       // the extractor is given the open tasks and told not to duplicate them.
@@ -1739,13 +1767,26 @@ async function msgAnalyze() {
 async function msgToChat() {
   const ids = [...msgSel];
   if (!ids.length) return;
-  const r = await (
-    await fetch('/api/messages/to-chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids }),
-    })
-  ).json();
+  // Disabled while in flight: each call creates a thread server-side, so a
+  // double click would leave an orphan empty conversation in the Chat tab.
+  const btn = $('#msg-tochat');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  let r;
+  try {
+    r = await (
+      await fetch('/api/messages/to-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      })
+    ).json();
+  } catch (err) {
+    msgModal('No se pudo enviar al chat', `<p class="hint">${esc(String(err))}</p>`);
+    return;
+  } finally {
+    btn.disabled = false;
+  }
   if (r.error) {
     msgModal('No se pudo enviar al chat', `<p class="hint">${esc(r.error)}</p>`);
     return;
