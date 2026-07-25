@@ -1,6 +1,6 @@
 # Dad's App — Project State & Contributor Guide
 
-**Snapshot: version 1.7.0 (released 2026-07-25).** This is the "how it actually works
+**Snapshot: version 1.7.1 (released 2026-07-25).** This is the "how it actually works
 and how to change it safely" document. The other two docs cover different questions:
 
 | Doc | Answers |
@@ -139,6 +139,15 @@ is also why adding it needed no schema change and shipped as a normal code updat
     re-resolves on OS change when the preference is `auto`. `style.css` therefore has
     **no `prefers-color-scheme` query for tokens**: light lives in `:root`, dark in
     `:root[data-theme='dark']`. Adding a token means adding it to both.
+15. **Every AI-proposed task insert goes through `saveTasks()`** (`extract/pipeline.ts`) —
+    it holds the deterministic duplicate guard (§5). A new feature that INSERTs into
+    `tasks` directly reopens the "repeat analysis re-creates existing tasks" bug that
+    1.7.1 closed. (Manual creation by the owner is exempt by design; the chat agent's
+    `create_task` applies the open-title rule itself.)
+16. **`input.search` grows (`flex: 1`) for horizontal toolbars.** Inside a *column* flex
+    container that growth is vertical — the input balloons to absorb whatever space the
+    content below doesn't fill. Any `.search` in a column needs `flex: none`
+    (see `.msg-side .search`).
 
 ---
 
@@ -183,11 +192,29 @@ than only the first. Both of those used to lose data permanently, because a row 
 `analyzeSelection()` (Mensajes tab) deliberately **ignores and never sets `processed`**.
 Re-checking a message therefore can't quietly drain it from the normal pipeline queue, and
 the same selection can be run again. Proposed tasks land in Bandeja like any other. When it
-returns nothing, that usually means "already covered" — the extractor is handed the open
-tasks and told not to duplicate them — so the UI says so and lists related open tasks
-rather than showing a bare zero. Those related tasks are a **relatedness heuristic** (same
-source message or client hint), not the extractor's actual dedup decision, which it doesn't
-report.
+creates nothing the modal says which of three things happened: the model proposed nothing
+("already covered", with a **relatedness heuristic** listing open tasks from the same
+source messages or client — not the extractor's actual dedup decision, which it doesn't
+report); or its proposals were **refused as deterministic duplicates** (listed by name and
+state); or a mix.
+
+### Task dedup is two layers (1.7.1 — the "third Analizar re-created the task" fix)
+
+Layer 1 is the prompt: the extractor is handed the open tasks and told not to duplicate
+them. That guard is **probabilistic** and over repeated runs it slips — observed on the
+third re-analysis of the same selection. Layer 2, `saveTasks()` in `extract/pipeline.ts`,
+is **deterministic** and covers every save path (Analizar, Proceso, cron, plus the same
+rule in the chat agent's `create_task`):
+
+- refuse when an **open** task (proposed/todo/waiting, not archived/trashed) has the same
+  `normTitle` (accent/case/punctuation-insensitive);
+- refuse when a task in **any** state cites the same `source_message_id` with the same
+  `normTitle` (re-analysis must not resurrect what the owner already finished or trashed);
+- `done` alone does not block — a client re-requesting finished work is a new task;
+- refusals come back as `duplicates` and are shown in the UI, never swallowed.
+
+Known boundary: normTitle can't equate *semantically* different wordings of the same task —
+that case still relies on layer 1.
 
 ---
 
@@ -417,6 +444,20 @@ to force it.
 
 ## 11. Recently fixed — do not regress
 
+**1.7.1**
+
+| Fix | Where |
+|---|---|
+| Repeated "Analizar" of the same selection could re-create an existing task — the only dedup was the model's judgment (probabilistic; slipped on the third run). Deterministic `saveTasks()` guard added, covering Analizar / Proceso / cron; refused proposals are reported to the UI as `duplicates` | `extract/pipeline.ts` · §5, invariant 15 |
+| Chat agent's `create_task` had the same hole (a retried tool call or a repeated ask stacked duplicate todos) — now reports the existing open task instead | `chat/index.ts` |
+| `loadOpenTasks` fed **trashed** tasks to the extractor as "already open", silently suppressing valid proposals | `extract/pipeline.ts` |
+| Mensajes sidebar search input ballooned vertically when results were short (`input.search`'s toolbar `flex: 1` acting on a column axis) | `style.css` · invariant 16 |
+| "Enviar al Chat" double-click created orphan empty threads (no in-flight guard, unlike Analizar) | `app.js` `msgToChat` |
+| Out-of-order sidebar-search responses: a slow reply for an earlier query overwrote the newer results | `app.js` `runMsgSearch` |
+| Failed thread fetch left "Cargando…" on screen forever | `app.js` `openMsgChat` |
+| A message body containing the literal `⟦/SELECCIÓN⟧` sentinel broke the collapsed transcript in Chat (untrusted text terminating the block early) | `extract/pipeline.ts` `selectionTranscript` |
+| `related` heuristic skipped its same-source-message leg whenever no client hint resolved (e.g. an outgoing-only selection) | `extract/pipeline.ts` |
+
 **1.7.0**
 
 | Fix | Where |
@@ -472,7 +513,11 @@ colours** without re-sampling (§10).
   the corner, contrast ≥ 4.5:1 in both themes) are the obvious thing to make permanent.
 - **Processing ignores chat selection** for already-imported messages (§5).
 - **No automated tests.** `tsc` + `node --check` + manual is the whole safety net;
-  the pipeline and reminder logic are the obvious first candidates for unit tests.
+  the pipeline and reminder logic are the obvious first candidates for unit tests. The
+  1.7.1 dedup was verified with a throwaway 8-scenario script run as
+  `DATA_DIR=<scratch> npx tsx test.ts` against a fresh scratch DB (seed stub `messages`
+  rows first — `tasks.source_message_id` has an enforced FK); that recipe is the natural
+  seed for a real test suite.
 - **iMessage temp-path attachment loss** is unrecoverable by design — `chat.db` points at
   purged `/var/folders/…` paths. Count them with the SQL in `DEBUGGING.md` §6.
 - **WhatsApp on-demand media is unreliable for old messages** (`getMessageById` fails far

@@ -6,7 +6,7 @@ this file is for *when something breaks, where to look*. Optimized for symptom �
 **App:** local Electron task-tracker. Ingests iMessage (`chat.db`, read-only) + WhatsApp
 (read-only Web mirror), runs an Express server in-process, proposes tasks via Claude Haiku,
 shows a local web UI at `localhost:4319`. Single user (the owner's father, on his Mac).
-Current version at time of writing: **1.5.1** (see `package.json`).
+Current version at time of writing: **1.7.1** (see `package.json`).
 
 ---
 
@@ -168,6 +168,10 @@ Each tile has a server-computed `state` (`/api/attachments`, `attachmentState()`
   `overflow: hidden`, which disables the automatic `min-height: auto` that stops a flex item
   shrinking below its content. Symptom: list rows squash to ~18px and their secondary lines
   render at zero height. Fix is `flex: none` on the row (see `.msg-chats .msg-chat`).
+- **`input.search` has `flex: 1` for horizontal toolbars** — inside a COLUMN flex container
+  that grow applies vertically, so the input balloons to fill whatever the content below
+  leaves free (bit the Mensajes sidebar in 1.7.0: a search with few hits stretched the box to
+  hundreds of px). Any `.search` placed in a column needs `flex: none` (see `.msg-side .search`).
 
 ### Database / migrations
 
@@ -196,8 +200,23 @@ Each tile has a server-computed `state` (`/api/attachments`, `attachmentState()`
   undescribed file is lost permanently. Caps: manual "Procesar" 1000, cron 200, Mensajes
   selection ≤40.
 - **"Analizar" in Mensajes is a preview run** (`analyzeSelection`): it ignores and never sets
-  `processed`, so re-checking can't drain the pipeline queue and is repeatable. If it proposes
-  nothing, that is usually the dedup working — the extractor is given the open tasks.
+  `processed`, so re-checking can't drain the pipeline queue and is repeatable. If it creates
+  nothing, the modal says exactly why — either the model proposed nothing, or its proposals
+  were refused as duplicates (listed with their state).
+- **Task dedup is TWO layers (1.7.1).** Layer 1 is the prompt ("do not re-propose open tasks")
+  — probabilistic, and it *does* slip on repeated runs (observed: the third "Analizar" of the
+  same selection re-created a task the first two runs declined). Layer 2 is deterministic, in
+  `saveTasks()` (`pipeline.ts`), covering every save path (Analizar / Proceso / cron): an
+  insert is refused when (a) an OPEN task (proposed/todo/waiting, not archived/trashed) has
+  the same `normTitle` (accent/case/punctuation-insensitive), or (b) a task in ANY state cites
+  the same `source_message_id` with the same `normTitle` (re-analysis must not resurrect what
+  the owner already did or trashed). `done` alone does NOT block — a re-request of finished
+  work is a new task. Refusals return as `duplicates` and surface in the UI. The chat agent's
+  `create_task` has guard (a) too. **If duplicates ever reappear, suspect a title the model
+  worded differently** — normTitle can't equate semantically different titles; that boundary
+  is deliberate.
+- **`loadOpenTasks` must exclude the Papelera** (`deleted_at IS NULL`) — before 1.7.1 trashed
+  tasks were fed to the extractor as "already open", silently suppressing valid proposals.
 - **Import ≠ process:** "Importar historial" only fills the DB; "Procesar mensajes nuevos"
   analyzes unprocessed rows. WhatsApp import count is **per chat**; iMessage is **total**.
 - Extractor keeps `source_quote` verbatim (used for WhatsApp/iMessage text search); `title`/`detail` are Spanish.
