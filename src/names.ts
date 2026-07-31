@@ -59,11 +59,15 @@ export function nameMap(): Record<string, string> {
  * model produced, so the same client accumulated several spellings and the
  * Clientes tab listed each unresolvable one as a phantom contact with 0
  * messages. Observed in the live DB: 9 of 13 distinct hints were not handles —
- * chat titles ("Seniors 2024"), group names, and space-formatted phone numbers
- * ("+57 321 4274369") that can never match the stored handle format.
+ * they were chat titles, group names, and space-formatted phone numbers, none of
+ * which can ever match the stored handle format.
  *
  * Digits-only comparison is what catches that last case: a hint of
- * "+57 321 4274369" and a handle of "573214274369@c.us" are the same person.
+ * "+00 000 0000000" and a handle of "000000000000@c.us" are the same person.
+ *
+ * The examples here are synthetic on purpose. Never paste real contact data out
+ * of the database into source or docs — this repo is public and the bundle ships
+ * these comments in `dist/`.
  */
 export function resolveClientHint(client: string): string {
   const c = client.trim();

@@ -118,7 +118,7 @@ const msgId = Number(
   db()
     .prepare(
       `INSERT INTO messages (source, source_msg_id, chat_id, chat_name, sender, direction, body, ts, ingested_at)
-       VALUES ('imessage', 'smoke-1', 'chat-1', 'Cliente Uno', '+573001112233@c.us', 'incoming', 'necesito toallas', ?, ?)`,
+       VALUES ('imessage', 'smoke-1', 'chat-1', 'Cliente Uno', '+575550000001@c.us', 'incoming', 'necesito toallas', ?, ?)`,
     )
     .run(Date.now(), Date.now()).lastInsertRowid,
 );
@@ -145,20 +145,20 @@ check('client_hint is normalized to a handle when one resolves', () => {
   db()
     .prepare(
       `INSERT INTO clients (handle, name, product_need, created_at, updated_at)
-       VALUES ('+573001112233@c.us', 'Cliente Uno', 'toallas', ?, ?)`,
+       VALUES ('+575550000001@c.us', 'Cliente Uno', 'toallas', ?, ?)`,
     )
     .run(now, now);
   assert(
-    resolveClientHint('Cliente Uno') === '+573001112233@c.us',
+    resolveClientHint('Cliente Uno') === '+575550000001@c.us',
     'an exact client name should resolve to its handle',
   );
   // The live-DB failure case: a space-formatted number never matched a handle.
   assert(
-    resolveClientHint('+57 300 111 2233') === '+573001112233@c.us',
+    resolveClientHint('+57 555 000 0001') === '+575550000001@c.us',
     'a space-formatted phone number should resolve on digits',
   );
-  assert(resolveClientHint('Seniors 2024') === 'Seniors 2024', 'an unresolvable hint should pass through');
-  assert(typeof nameMap()['+573001112233@c.us'] === 'string', 'nameMap should resolve the handle');
+  assert(resolveClientHint('Grupo Ejemplo 2024') === 'Grupo Ejemplo 2024', 'an unresolvable hint should pass through');
+  assert(typeof nameMap()['+575550000001@c.us'] === 'string', 'nameMap should resolve the handle');
 });
 
 // ── 3. Reminders must ignore the Papelera ──
