@@ -38,6 +38,25 @@ office, each a fully independent install with its own database and nothing share
 7. **A migrated DB proves nothing about a fresh one.** Every new employee is a fresh
    install. Run **`npm run smoke`** before every release — see §7 and `PROJECT_STATE.md`
    invariant 17.
+8. **Never launch a freshly built `.app` on a Mac where the real one is running.** The
+   second copy would start a rival WhatsApp session on the same number and wedge it (rule 6).
+   `requestSingleInstanceLock()` normally kills the second copy silently — an empty log and
+   an instant exit is that lock firing, not a broken build — but do not rely on it. Note that
+   **setting `HOME` does not sandbox an Electron launch**: macOS resolves the app's paths via
+   `NSHomeDirectory()` from the password database, so the override is ignored. To exercise a
+   packaged build safely, run its compiled server under Electron's Node *without* creating an
+   app instance:
+   ```bash
+   R="…/Asistente de Tareas.app/Contents/Resources/app"
+   ELECTRON_RUN_AS_NODE=1 DATA_DIR=/tmp/pkg PORT=4401 \
+     "…/Asistente de Tareas.app/Contents/MacOS/Asistente de Tareas" "$R/dist/server/index.js"
+   ```
+   That exercises the packaged code **and** the packaged native module (the real ABI check)
+   with no window, no single-instance lock, and no WhatsApp.
+9. **Never paste real contact data into source or docs.** The repo is public and `dist/`
+   ships inside the `.app`, so a comment is a published document. Use synthetic examples
+   (555-prefixed numbers, "Grupo Ejemplo"). 1.7.2 shipped a client's real number this way
+   before it was caught.
 
 ---
 
@@ -46,8 +65,13 @@ office, each a fully independent install with its own database and nothing share
 Nothing here is automatable — there is no MDM. Getting the order wrong is the most common
 source of "it doesn't work on the new machine".
 
-1. Copy the `.app`, then **`xattr -cr "/Applications/Asistente de Tareas.app"`** — without
-   it an AirDropped copy is rejected as "damaged" (§5).
+1. **Download the `.app`** from the latest release —
+   `https://github.com/Cherynoble/asistente-de-tareas/releases/latest` →
+   `Asistente-de-Tareas-<version>-mac-arm64.zip` (Apple Silicon only) — unzip into
+   `/Applications`, then **`xattr -cr "/Applications/Asistente de Tareas.app"`**. Without
+   that the copy is rejected as "damaged" (§5); a browser download is quarantined exactly
+   like an AirDrop. Always take the **newest** release: an older shell permanently lacks
+   fixes that only ship with a new `.app` (§4).
 2. Grant **Full Disk Access**, then **fully quit and relaunch**. TCC only applies the grant
    on the *next* launch; skipping the relaunch is why FDA "doesn't work" (§5).
 3. Enter **that person's own** Anthropic API key in Ajustes. One key across machines means
@@ -152,9 +176,15 @@ sqlite3 -readonly "$DB" "SELECT source, COUNT(*) FROM messages GROUP BY source;"
      on mixed versions. When diagnosing anything, **ask which version that machine is on**
      (Ajustes shows it).
 - **New `.app` (only for `electron/*.cjs` shell changes or native-dep/ABI changes):**
-  `npm run dist` → ad-hoc-signed `.app` in `/Users/cherynoble/dadsapp-release/mac-arm64/`,
-  AirDrop **to every Mac**, then `xattr -cr` on each. Bump `MIN_SHELL_VERSION` to force it.
-  This is O(N) manual work in silo mode — batch shell changes instead of drip-feeding them.
+  `npm run dist` → ad-hoc-signed `.app` in `/Users/cherynoble/dadsapp-release/mac-arm64/`.
+  Zip it with **`ditto -c -k --sequesterRsrc --keepParent`** (plain `zip` breaks the
+  signature → "damaged"), then `gh release upload code-vX.Y.Z <zip> --clobber`. Since 1.7.2
+  the `.app` is a release asset, so people **download** it instead of waiting for an AirDrop.
+  Verify by downloading it back and running `codesign --verify --deep --strict` on the
+  extracted bundle. Bump `MIN_SHELL_VERSION` to force installs onto it.
+  ⚠️ **Scan any build before publishing** — the repo is public and `dist/` ships inside the
+  bundle, so a source comment is a public document. 1.7.2 initially shipped a client's real
+  phone number pasted out of the live DB into a comment. Use synthetic examples only.
 
 **Key rule:** changes under `electron/` do **not** ship via online update — they sit dormant
 until a new `.app` is built. (e.g. the `will-navigate` guard added in 1.2.1.)

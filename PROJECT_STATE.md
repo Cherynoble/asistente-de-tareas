@@ -556,10 +556,35 @@ Delete the harness when done — it must not end up in the repo or in a release 
    updated automatically, so tell people, and expect version drift until §12's
    check-on-launch exists.
 
-**Ship a new `.app`** (only for `electron/*.cjs` or native/dep changes): `npm run dist`,
-AirDrop **to each Mac**, then `xattr -cr "…/Asistente de Tareas.app"` on each. Bump
-`MIN_SHELL_VERSION` to force it. This is the expensive path in silo mode — batch shell
-changes rather than shipping them one at a time.
+**Ship a new `.app`** (only for `electron/*.cjs` or native/dep changes):
+
+1. `npm run dist` → ad-hoc-signed `.app` in `/Users/cherynoble/dadsapp-release/mac-arm64/`.
+2. Zip it with **`ditto`, never `zip`** — `ditto -c -k --sequesterRsrc --keepParent`. Plain
+   `zip` drops the metadata the signature seals, and the copy then opens as *"damaged"* with
+   no way through.
+3. `gh release upload code-vX.Y.Z "Asistente-de-Tareas-X.Y.Z-mac-arm64.zip" --repo … --clobber`
+4. Verify by **downloading it back** and running `codesign --verify --deep --strict` on the
+   extracted bundle — that is the check that predicts whether it opens on someone else's Mac.
+5. Bump `MIN_SHELL_VERSION` to force installs onto it.
+
+The `.app` is now published as a release asset (since 1.7.2), so new machines download it
+instead of waiting for an AirDrop — and the updater's `needs-new-app` branch, which opens the
+releases page, finally has something to find there. **The install still needs `xattr -cr`**: a
+browser download carries `com.apple.quarantine` exactly like AirDrop does. Only real
+notarization removes that step (§12).
+
+⚠️ **Never publish a build without scanning it first.** The repo is public and `dist/` ships
+inside the bundle, so **anything written in a source comment becomes public**. This bit
+already: 1.7.2 initially shipped a client's real phone number that had been copied out of the
+live DB into a doc comment in `names.ts`. Before uploading:
+
+```bash
+R="…/Asistente de Tareas.app/Contents/Resources/app"
+grep -rIlE "[0-9]{9,}@(c\.us|lid)|sk-ant-" "$R/dist" "$R/public" "$R/electron"
+find "$APP" \( -name ".env*" -o -name "app.db*" -o -name "wwebjs_auth" \) | head
+```
+
+Use synthetic examples in comments and tests — never real contact data.
 
 ⚠️ **Pushing to GitHub does not update anyone's app.** Only `npm run release` does.
 
