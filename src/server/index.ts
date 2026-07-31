@@ -113,6 +113,21 @@ const MIME_BY_EXT: Record<string, string> = {
 const app = express();
 
 /**
+ * Clamp a query/body param into [lo, hi], falling back to `dflt` when it isn't a
+ * number at all.
+ *
+ * The bare `Math.min(Math.max(Number(x), lo), hi)` idiom this replaces looks
+ * safe but propagates NaN — every comparison with NaN is false, so `Number('abc')`
+ * came straight out the other end and reached SQLite as a LIMIT, which failed
+ * with "datatype mismatch". Any hand-typed or stale URL could 500 a route.
+ */
+function clampNum(raw: unknown, dflt: number, lo: number, hi: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return dflt;
+  return Math.min(Math.max(n, lo), hi);
+}
+
+/**
  * The dashboard has no authentication — it holds the owner's entire message
  * history and can spend API credits — so requests must only ever come from the
  * app's own window (or a browser on this Mac). Three layers, all cheap:
@@ -307,7 +322,10 @@ app.post('/api/tasks/bulk', (req, res) => {
       head = [now];
       break;
     case 'purge':
-      sql = `DELETE FROM tasks WHERE id IN (${ph})`;
+      // Only ever hard-delete what is already in the Papelera. This is the one
+      // irreversible action in the API, and the UI only offers it from Trash —
+      // but a malformed/replayed call must not be able to destroy live tasks.
+      sql = `DELETE FROM tasks WHERE id IN (${ph}) AND deleted_at IS NOT NULL`;
       head = [];
       break;
     case 'client':
@@ -354,7 +372,8 @@ app.post('/api/clients/bulk', (req, res) => {
   } else if (action === 'restore') {
     d.prepare(`UPDATE clients SET deleted_at=NULL, updated_at=? WHERE handle IN (${ph})`).run(now, ...list);
   } else if (action === 'purge') {
-    d.prepare(`DELETE FROM clients WHERE handle IN (${ph})`).run(...list);
+    // Same rule as tasks: purge is Trash-only and irreversible.
+    d.prepare(`DELETE FROM clients WHERE handle IN (${ph}) AND deleted_at IS NOT NULL`).run(...list);
   } else {
     res.status(400).json({ error: 'unknown action' });
     return;
@@ -585,9 +604,13 @@ app.post('/api/chat', async (req, res) => {
     res.status(400).json({ error: 'message required' });
     return;
   }
+  // Hoisted so the catch can roll back a thread this request created — a turn
+  // that fails (bad API key, network, a DB error) must not leave an untitled
+  // empty conversation in the sidebar. Reproduced on a fresh install, where the
+  // first message failed and every retry stacked another orphan.
+  let threadId = Number(body.threadId);
+  let createdThread = false;
   try {
-    let threadId = Number(body.threadId);
-    let createdThread = false;
     if (!threadId || !Number.isFinite(threadId)) {
       threadId = createThread(titleFrom(message));
       createdThread = true;
@@ -613,6 +636,7 @@ app.post('/api/chat', async (req, res) => {
     const { reply, usedTools } = await runTurn(threadId, composed);
     res.json({ reply, threadId, createdThread, usedTools });
   } catch (err) {
+    if (createdThread) deleteThread(threadId); // roll back the empty thread
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
@@ -646,10 +670,11 @@ app.post('/api/chat/upload', async (req, res) => {
     res.status(400).json({ error: 'Solo se permiten imágenes o PDF.' });
     return;
   }
+  // Hoisted for the same rollback reason as POST /api/chat above.
+  let threadId = Number(b.threadId);
+  let createdThread = false;
   try {
     const userText = (b.message ?? '').trim();
-    let threadId = Number(b.threadId);
-    let createdThread = false;
     if (!threadId || !Number.isFinite(threadId)) {
       threadId = createThread(titleFrom(userText || name));
       createdThread = true;
@@ -666,6 +691,7 @@ app.post('/api/chat/upload', async (req, res) => {
     const { reply, usedTools } = await runTurn(threadId, composed, [{ name }]);
     res.json({ reply, threadId, createdThread, usedTools, attachment: { name }, analysis: desc });
   } catch (err) {
+    if (createdThread) deleteThread(threadId); // roll back the empty thread
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
@@ -746,7 +772,7 @@ app.post('/api/whatsapp/accounts/:id/repair', async (req, res) => {
 
 /** Backfill recent history for one connected account. */
 app.post('/api/whatsapp/accounts/:id/backfill', async (req, res) => {
-  const perChat = Math.min(Math.max(Number((req.body as { perChat?: number })?.perChat ?? 200), 1), 2000);
+  const perChat = clampNum((req.body as { perChat?: number })?.perChat, 200, 1, 2000);
   try {
     res.json(await backfillAccount(req.params.id, perChat));
   } catch (err) {
@@ -1085,8 +1111,8 @@ function attachmentState(source: string, storedPath: string | undefined, fda: bo
 /** Persistent attachment gallery: one entry per attachment on messages that have
  *  them, newest first, respecting the included-chats selection, paginated. */
 app.get('/api/attachments', (req, res) => {
-  const limit = Math.min(Math.max(Number(req.query.limit ?? 120), 1), 500);
-  const offset = Math.max(Number(req.query.offset ?? 0), 0);
+  const limit = clampNum(req.query.limit, 120, 1, 500);
+  const offset = clampNum(req.query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
   const { filtering, allowed } = includedChats();
   if (filtering && allowed.length === 0) {
     res.json({ attachments: [], done: true });
@@ -1296,7 +1322,7 @@ app.get('/api/messages', (req, res) => {
     dir,
     cursorTs: req.query.cursorTs !== undefined ? Number(req.query.cursorTs) : undefined,
     cursorId: req.query.cursorId !== undefined ? Number(req.query.cursorId) : undefined,
-    limit: Math.min(Math.max(Number(req.query.limit ?? 100), 1), 300),
+    limit: clampNum(req.query.limit, 100, 1, 300),
     q: String(req.query.q ?? ''),
     onlyUnprocessed: req.query.unprocessed === '1',
     onlyAttachments: req.query.withFiles === '1',
@@ -1322,7 +1348,7 @@ app.get('/api/messages/search', (req, res) => {
   }
   const names = nameMap();
   const fda = hasFda();
-  const hits = searchAllMessages(q, Math.min(Math.max(Number(req.query.limit ?? 40), 1), 100)).map((r) =>
+  const hits = searchAllMessages(q, clampNum(req.query.limit, 40, 1, 100)).map((r) =>
     browseMessage(r, names, fda, new Map()),
   );
   res.json({ hits });
@@ -1384,7 +1410,7 @@ app.post('/api/messages/to-chat', (req, res) => {
 
 /** One-time backfill: import the most recent N iMessages. */
 app.post('/api/backfill', (req, res) => {
-  const count = Math.min(Math.max(Number((req.body as { count?: number })?.count ?? 1000), 1), 50000);
+  const count = clampNum((req.body as { count?: number })?.count, 1000, 1, 50000);
   try {
     const { read, inserted } = backfillByCount(count);
     const total = (db().prepare('SELECT COUNT(*) AS n FROM messages').get() as { n: number }).n;
@@ -1411,8 +1437,8 @@ app.get('/api/process/stream', async (req, res) => {
   const vision = req.query.vision === '1';
   // Default high so "Procesar" analyzes every new image/PDF (bounded per click by
   // the unprocessed-message count); still clamped to keep one run's cost sane.
-  const visionCap = Math.min(Math.max(Number(req.query.cap ?? 1000), 0), 2000);
-  const maxBatches = Math.min(Math.max(Number(req.query.maxBatches ?? 10), 1), 100);
+  const visionCap = clampNum(req.query.cap, 1000, 0, 2000);
+  const maxBatches = clampNum(req.query.maxBatches, 10, 1, 100);
   const sse = sseSender(req, res);
 
   try {
@@ -1493,6 +1519,24 @@ function startNudgeLoop(): void {
   };
   nudgeTimer = setInterval(tick, 60 * 60 * 1000); // hourly
 }
+
+/**
+ * Last-resort error handler for /api. Must be registered AFTER every route, and
+ * must take four arguments or Express treats it as ordinary middleware.
+ *
+ * Only ~20 of the 60 routes carry their own try/catch. Without this, a throw in
+ * any of the other 40 fell through to Express's default handler, which answers
+ * with an HTML stack trace — leaking absolute filesystem paths, and breaking the
+ * frontend, which calls .json() on every response and dies with "Unexpected
+ * token '<'" instead of showing the real error. A fresh install hit this on its
+ * very first chat message (see the 1.7.2 schema fix).
+ */
+app.use('/api', (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error('[api]', message);
+  if (res.headersSent) return; // a stream (SSE/file) already started — nothing to say
+  res.status(500).json({ error: message });
+});
 
 // Resilience net for an always-on app: a stray promise rejection from a library
 // internal (e.g. puppeteer/whatsapp-web.js) shouldn't take the whole app down.

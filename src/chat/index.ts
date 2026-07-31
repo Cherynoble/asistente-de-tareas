@@ -2,7 +2,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { db } from '../db/index.js';
 import { config } from '../config.js';
 import { anthropicClient } from '../settings.js';
-import { nameMap } from '../names.js';
+import { nameMap, resolveClientHint } from '../names.js';
 import { addMessage, threadMessages, listMemories, saveMemory } from './store.js';
 import { scheduleReminder } from '../notify/scheduled.js';
 import { describeAttachment } from '../extract/vision.js';
@@ -14,19 +14,8 @@ export interface ChatMsg {
   content: string;
 }
 
-/** Map a client name the user typed to a known handle, if one matches; else keep the text. */
-function resolveClientHint(client: string): string {
-  const c = client.trim();
-  if (!c) return '';
-  const names = nameMap();
-  const lc = c.toLowerCase();
-  let partial = '';
-  for (const [handle, name] of Object.entries(names)) {
-    if (name.toLowerCase() === lc) return handle; // exact name → handle
-    if (!partial && name.toLowerCase().includes(lc)) partial = handle;
-  }
-  return partial || c;
-}
+// resolveClientHint moved to ../names.ts in 1.7.2 so the extraction pipeline
+// shares one definition of "which contact is this task for" — see the note there.
 
 const SYSTEM = `You are the assistant inside "Dad's App", a task tracker for a trading-company owner. You can see his recent messages, his clients, his current tasks, and durable memory (provided below as context). Help him: answer what a client asked for, what's pending or overdue, what he might be forgetting, draft a reply, etc. Be concise and practical. Only use the provided context — if the answer isn't there, say so rather than guessing.
 

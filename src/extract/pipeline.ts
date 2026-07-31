@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { db } from '../db/index.js';
+import { resolveClientHint } from '../names.js';
 import { SEL_CLOSE, SEL_OPEN } from '../chat/store.js';
 import { ClaudeExtractor } from './claude.js';
 import { describeAttachment } from './vision.js';
@@ -163,8 +164,13 @@ export function saveTasks(tasks: ProposedTask[]): { saved: ProposedTask[]; dupli
         duplicates.push({ title: t.title, existingId: twin.id, existingTitle: twin.title, existingState: stateOf(twin) });
         continue;
       }
-      const info = insert.run(t.title, t.detail, t.clientHint ?? '', t.sourceMessageId, t.sourceQuote ?? '', now, now);
-      saved.push(t);
+      // Normalize the model's free-text client name to a handle when one matches,
+      // so every task-creating path writes client_hint the same way (see
+      // resolveClientHint in names.ts). Unresolvable hints — a group chat title,
+      // a one-off name — pass through unchanged and stay useful as a label.
+      const hint = resolveClientHint(t.clientHint ?? '');
+      const info = insert.run(t.title, t.detail, hint, t.sourceMessageId, t.sourceQuote ?? '', now, now);
+      saved.push({ ...t, clientHint: hint });
       if (key) openByTitle.set(key, { id: Number(info.lastInsertRowid), title: t.title, status: 'proposed' });
     }
   })();

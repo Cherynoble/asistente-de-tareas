@@ -41,14 +41,22 @@ export function nudgeIntervalDays(): number {
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 2;
 }
 
-/** Active, unfinished tasks (todo/waiting), most urgent first. */
+/**
+ * Active, unfinished tasks (todo/waiting), most urgent first.
+ *
+ * `deleted_at IS NULL` is load-bearing: a task the owner moved to the Papelera is
+ * not open. Without it a trashed task keeps firing "⚠️ N vencidas" banners forever
+ * and inflates the morning digest, with no way to make it stop short of emptying
+ * the trash. Same class of bug as the `loadOpenTasks` fix in 1.7.1 — that one
+ * closed the extractor's copy of this query and missed the reminders engine.
+ */
 export function openTasks(): OpenTask[] {
   return db()
     .prepare(
       `SELECT id, title, status, client_hint AS clientHint, due_at AS dueAt,
               last_nudge_at AS lastNudgeAt, created_at AS createdAt
        FROM tasks
-       WHERE status IN ('todo','waiting') AND archived_at IS NULL
+       WHERE status IN ('todo','waiting') AND archived_at IS NULL AND deleted_at IS NULL
        ORDER BY (due_at IS NULL), due_at ASC, created_at ASC`,
     )
     .all() as OpenTask[];

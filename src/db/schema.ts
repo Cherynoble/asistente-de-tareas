@@ -27,6 +27,10 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages (ts);
 CREATE INDEX IF NOT EXISTS idx_messages_processed ON messages (processed);
+-- The Mensajes pager filters by chat_id and orders by (ts, id); without this the
+-- planner falls back to idx_messages_ts and scans every message in the DB for a
+-- chat that may hold a handful. Matters as a silo's history grows.
+CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages (chat_id, ts);
 
 CREATE TABLE IF NOT EXISTS clients (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,11 +45,19 @@ CREATE TABLE IF NOT EXISTS clients (
 
 CREATE TABLE IF NOT EXISTS tasks (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- RESERVED, NEVER WRITTEN. No code path has ever set client_id (verified: 0
+  -- rows in the live DB). client_hint below is the real task→contact link. Kept
+  -- because dropping a column in SQLite means rebuilding the table, and it is
+  -- the natural home for a proper FK if the model is ever tightened. Don't
+  -- write JOINs against it expecting data.
   client_id     INTEGER REFERENCES clients (id),
   title         TEXT    NOT NULL,
   detail        TEXT    NOT NULL DEFAULT '',
   status        TEXT    NOT NULL DEFAULT 'proposed', -- proposed|todo|waiting|done|dismissed
-  client_hint   TEXT    NOT NULL DEFAULT '',         -- chat/sender the task relates to
+  -- The contact this task belongs to: a HANDLE when one resolved, else free
+  -- text (group title, one-off name). Every write path normalizes through
+  -- resolveClientHint() in names.ts — see the note there before adding another.
+  client_hint   TEXT    NOT NULL DEFAULT '',
   source_message_id INTEGER REFERENCES messages (id), -- message that triggered it
   source_quote  TEXT    NOT NULL DEFAULT '',         -- verbatim snippet to search in WhatsApp/iMessage
   due_at        INTEGER,                     -- optional deadline, unix ms
@@ -73,11 +85,16 @@ CREATE TABLE IF NOT EXISTS chat_threads (
 );
 
 CREATE TABLE IF NOT EXISTS chat_messages (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  thread_id  INTEGER NOT NULL REFERENCES chat_threads (id) ON DELETE CASCADE,
-  role       TEXT    NOT NULL,            -- 'user' | 'assistant'
-  content    TEXT    NOT NULL,
-  created_at INTEGER NOT NULL
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread_id   INTEGER NOT NULL REFERENCES chat_threads (id) ON DELETE CASCADE,
+  role        TEXT    NOT NULL,            -- 'user' | 'assistant'
+  content     TEXT    NOT NULL,
+  -- JSON array of {name} for files sent in the thread. Added in 0.3.0 but, until
+  -- 1.7.2, ONLY as an ensureColumn migration — so every DB created fresh after
+  -- 0.3.0 lacked it and the whole Chat tab 500'd on its first message. Nobody
+  -- noticed because the original install predates 0.3.0 and was migrated.
+  attachments TEXT    NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages (thread_id);

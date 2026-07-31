@@ -1,7 +1,7 @@
 # Dad's App — Project State & Contributor Guide
 
-**Snapshot: version 1.7.1 (released 2026-07-25).** This is the "how it actually works
-and how to change it safely" document. The other two docs cover different questions:
+**Snapshot: version 1.7.2 (2026-07-30).** This is the "how it actually works and how to
+change it safely" document. The other two docs cover different questions:
 
 | Doc | Answers |
 |---|---|
@@ -13,14 +13,74 @@ and how to change it safely" document. The other two docs cover different questi
 
 ## 1. One-paragraph summary
 
-A single-user macOS Electron app for a trading-company owner (the owner's father).
-It mirrors his **iMessage** (read-only from `chat.db`) and **WhatsApp** (read-only
-Web mirror) into one local SQLite DB, runs them through **Claude Haiku** to propose
-follow-up tasks he'd otherwise forget, and nags him until they're done. Everything is
-local: no server, no accounts, no telemetry. The UI is a Spanish-language local web app
-served by an in-process Express server at `localhost:4319` — vanilla HTML/CSS/JS, no
-bundler and no framework, styled as a translucent "liquid glass" surface with light and
-dark themes (§6a).
+A macOS Electron app, originally for one trading-company owner (the owner's father) and
+now deployed to several people in his office. Each install mirrors **its own user's**
+iMessage (read-only from `chat.db`) and WhatsApp (read-only Web mirror) into a local
+SQLite DB, runs them through **Claude Haiku** to propose follow-up tasks they'd otherwise
+forget, and nags until they're done. Everything is local: no server, no accounts, no
+telemetry. The UI is a Spanish-language local web app served by an in-process Express
+server at `localhost:4319` — vanilla HTML/CSS/JS, no bundler and no framework, styled as a
+translucent "liquid glass" surface with light and dark themes (§6a).
+
+---
+
+## 1a. Deployment model: SILO MODE (decided 2026-07-30)
+
+**Each install is a completely independent app with its own database. Nothing is shared
+between people, and nothing is meant to be.** This is a deliberate decision, not a
+limitation waiting to be fixed — read it before designing any feature that sounds
+collaborative.
+
+| | |
+|---|---|
+| **Unit of deployment** | one Mac, one macOS user, one `~/Library/Application Support/DadsApp/` |
+| **Shared between employees** | **nothing** — no tasks, no clients, no chat, no memory, no settings |
+| **Each person mirrors** | their *own* iMessage account and their *own* WhatsApp number |
+| **Coordination between people** | happens outside the app, as it does today (the office group chat) |
+
+**Why silo and not a shared server.** Three constraints make a hub genuinely hard, and
+none of them are about effort:
+
+1. **iMessage is per-Mac and per-Apple-ID.** `chat.db` only ever contains the messages of
+   the Apple ID signed into *that* Mac. There is no way to read a colleague's iMessage,
+   and no amount of server work changes it.
+2. **WhatsApp Web links a device to a number, and the cap is 4 linked devices.** If several
+   installs link the *same* company number they compete for slots and evict each other —
+   which produces exactly the "authenticated — syncing" wedge documented in
+   `DEBUGGING.md` §5. **One number must be linked by at most one install.**
+3. **The server has no authentication.** Loopback binding + the `/api` origin guard *is*
+   the security model (invariant 6). Sharing a DB would mean building auth first, and
+   pointing two installs at one `app.db` over a network share corrupts it — SQLite WAL
+   does not work over SMB/NFS.
+
+**What this means when you write code.** There is no `users` table, no `assignee`, no
+concept of "who". Don't add one halfway. A feature that only makes sense across people
+(assignment, a shared board, "who is handling this client") does not belong in silo mode —
+it belongs in the hub-and-spokes design, which is a different product and is not built.
+
+**Per-machine setup, every time** (there is no MDM and no fleet management):
+
+1. Copy the `.app`, then clear quarantine: `xattr -cr "/Applications/Asistente de Tareas.app"`.
+2. Grant **Full Disk Access** to the app, then **fully quit and relaunch** (TCC only applies
+   the grant on next launch).
+3. Enter that person's own Anthropic API key in Ajustes. **Give each install its own key**
+   — one key across N machines means no per-person budget, no attribution, and one leak
+   revokes everybody.
+4. **Choose the chat scope explicitly.** See the privacy note below — this step is not
+   optional.
+5. Connect that person's own WhatsApp number, and confirm no other install has it linked.
+
+⚠️ **Privacy — do this before anyone else's Mac runs this app.** An empty chat selection
+means **all chats**, so a default install ingests the user's entire personal iMessage and
+WhatsApp history, sends message text and photos to the Claude API, and runs a classifier
+that sorts their contacts into "Personal" vs "Oficina". That was fine when the only user
+owned the business and the data. For anyone else it is an HR and, in several
+jurisdictions, a legal problem. **On every install, select the work chats explicitly in
+Ajustes before the first import**, and tell the person what is being read. The
+`empty = all` semantics were left as-is deliberately — flipping them would silently change
+behaviour on the existing installs that rely on it — so the safety here is procedural, and
+the obvious next code change is a first-run scope gate that refuses to import until a
+selection exists (§12).
 
 ---
 
@@ -68,7 +128,7 @@ process would not inherit it, so `chat.db` reads would fail.
 | `tasks` | proposed → todo → waiting → done / dismissed | soft-delete `deleted_at`, archive `archived_at`, `last_nudge_at` throttle |
 | `clients` | handle → name, product need, category | `handle` UNIQUE; `category` = Personal/Oficina/custom/'' |
 | `settings` | key/value store | API key, scheduler, chat selections, WA registry |
-| `chat_threads` / `chat_messages` | assistant conversations | `attachments` is a JSON string |
+| `chat_threads` / `chat_messages` | assistant conversations | `attachments` is a JSON string. **Was missing from `schema.ts` until 1.7.2** — see invariant 17 |
 | `chat_memory` | long-term facts the assistant saved | deduped on exact content |
 | `ai_reminders` | one-off "recuérdame…" reminders | `notified_at` / `dismissed_at` lifecycle |
 
@@ -82,10 +142,20 @@ one list would otherwise shift it and mis-pair files (fixed in 1.5.3).
 `reminders_enabled`, `nudge_interval_days`, `selected_chats`, `last_digest_seen`,
 `wa_accounts`, and per-account `wa_selected_chats:<id>`, `wa_identity:<id>`, `wa_label:<id>`.
 
+**`tasks.client_id` is reserved and has never been written** by any code path (verified: 0
+rows in the live DB). The real task→contact link is **`client_hint`**, which holds a
+*handle* when one resolved and free text otherwise. Every write path normalizes it through
+`resolveClientHint()` in `names.ts` — added in 1.7.2, because until then the chat agent
+wrote handles and the extractor wrote whatever display name the model produced, so one
+client accumulated several spellings and the Clientes tab listed the unresolvable ones as
+phantom contacts with 0 messages.
+
 **Not in the DB:** the appearance preference (Ajustes → Apariencia) lives in
 `localStorage` under `theme` (`auto` | `light` | `dark`). It is a display preference for
 this machine, so it deliberately never touches the settings table or the server — which
-is also why adding it needed no schema change and shipped as a normal code update.
+is also why adding it needed no schema change and shipped as a normal code update. In silo
+mode every per-machine preference is like this by definition: nothing follows a person to
+another Mac.
 
 ---
 
@@ -98,6 +168,7 @@ is also why adding it needed no schema change and shipped as a normal code updat
 3. **`migrate()` runs BEFORE `exec(SCHEMA)`** in `db/index.ts` — `SCHEMA` has
    `CREATE INDEX` on columns an old DB may lack. Adding a column means editing
    **both** `schema.ts` (fresh installs) **and** `ensureColumn(...)` (existing DBs).
+   See invariant 17 for what happens when you only do the second one.
 4. **Rows are marked `processed = 1` only AFTER the extractor returns.** That's what
    makes an API failure safely retryable. The module-level `processingNow` flag is what
    stops a manual run and the cron from double-proposing the same rows.
@@ -148,6 +219,28 @@ is also why adding it needed no schema change and shipped as a normal code updat
     container that growth is vertical — the input balloons to absorb whatever space the
     content below doesn't fill. Any `.search` in a column needs `flex: none`
     (see `.msg-side .search`).
+17. **A migrated DB is not evidence that a fresh one works.** `ensureColumn()` returns
+    early when the table doesn't exist, so a column added *only* to `migrate()` never
+    reaches a new install. `chat_messages.attachments` went in that way in **0.3.0** and
+    was never added to `schema.ts`: every DB created fresh from 0.3.0 to 1.7.1 lacked it
+    and the **entire Chat tab 500'd on its first message**. It survived four minor versions
+    because the only database anyone tested against predates 0.3.0 and got the migration.
+    In silo mode every new employee *is* a fresh install, so this class of bug now ships to
+    everyone at once. **`npm run smoke` asserts fresh-schema parity — run it before every
+    release** (§10).
+18. **Every silo is independent (§1a).** No `users` table, no assignee, no cross-install
+    anything. Don't half-build a shared concept.
+19. **`purge` is Trash-only.** Both bulk purge paths carry `AND deleted_at IS NOT NULL`.
+    It is the one irreversible action in the API; the UI only offers it from the Papelera,
+    and the SQL must enforce that too rather than trusting the caller.
+20. **Clamp numeric params with `clampNum()`, never bare `Math.min(Math.max(Number(x)…))`.**
+    That idiom propagates `NaN` — every comparison with `NaN` is false, so a hand-typed
+    `?limit=abc` reached SQLite and 500'd the route with "datatype mismatch". `clampNum`
+    falls back to the default instead (`server/index.ts`).
+21. **A route that creates a thread must roll it back if the turn fails.** `POST /api/chat`
+    and `/api/chat/upload` hoist `threadId`/`createdThread` above the `try` and
+    `deleteThread()` in the `catch`. Without it every failed first message (bad key, no
+    network) left an empty conversation in the sidebar, and each retry stacked another.
 
 ---
 
@@ -236,6 +329,8 @@ that case still relies on layer 1.
 | Settings + WA account registry | `src/settings.ts` |
 | Diagnostics (DB binding, startup log) | `src/diagnostics.ts` |
 | Electron shell / updater | `electron/{main,updater,preload}.cjs` |
+| Fresh-install smoke test (`npm run smoke`) | `scripts/smoke-fresh-install.ts` |
+| Release publisher | `scripts/release.mjs` |
 | Frontend (no bundler, no framework) — see §6a | `public/{app.js,index.html,style.css}` |
 
 **UI tabs:** Bandeja · Tareas · Archivo · Papelera · Clientes · Adjuntos · **Mensajes** · Chat · Proceso · Ayuda · Ajustes.
@@ -258,7 +353,7 @@ espera", destructive/overdue) — an accent in any of those hues would collide. 
 gradient stops of `.primary` have to clear 4.5:1 against `--accent-ink`, which is why
 `--accent-hi` is a lift in chroma more than in lightness.
 
-**Type.** System stack (SF Pro on his Mac), fixed rem-ish scale, `tabular-nums`
+**Type.** System stack (SF Pro on macOS), fixed rem-ish scale, `tabular-nums`
 everywhere numbers line up. Deliberately **no web fonts** — the app is fully offline and
 local, and a Google Fonts request would add a network dependency that doesn't exist today.
 
@@ -327,11 +422,15 @@ cursorTs+cursorId, q, unprocessed, withFiles)* · `GET /messages/search` ·
 ## 8. Recipes for common changes
 
 **Add a DB column** → add to `schema.ts` AND an `ensureColumn(...)` in `db/index.ts`.
-Both, always. Test a query against a *copy* of the live DB, never the live one.
+Both, always (invariant 17 is what happens when you don't). Then add it to the `EXPECTED`
+map in `scripts/smoke-fresh-install.ts` and run `npm run smoke`. Test a query against a
+*copy* of the live DB, never the live one.
 
 **Add an HTTP route** → put it in `src/server/index.ts` near its siblings. It inherits
-the loopback + origin guard automatically. Validate/clamp every numeric query param
-(`Math.min(Math.max(Number(x), lo), hi)`) — the existing routes all do.
+the loopback + origin guard and the JSON error handler automatically. Clamp every numeric
+param with **`clampNum(raw, dflt, lo, hi)`** (invariant 20). A route may throw freely —
+the handler at the bottom of the file turns it into `{ error }` JSON — but a route that
+*creates* something should still catch and roll back (invariant 21).
 
 **Add a chat-agent tool** → append to `TOOLS` in `src/chat/index.ts` (Spanish
 description), handle it in `execTool` (async, returns a short string), and mention it in
@@ -382,8 +481,27 @@ inline `<details class="help-inline">` on the Proceso tab **and** the full Ayuda
 server reconnects the owner's live WhatsApp session):
 
 ```bash
-npx tsc --noEmit && node --check public/app.js
+npx tsc --noEmit && node --check public/app.js && npm run smoke
 ```
+
+**`npm run smoke` (`scripts/smoke-fresh-install.ts`) is the fresh-install gate.** It builds
+a throwaway DB in a temp dir, asserts that the *fresh* schema carries every column the code
+actually reads, and exercises the first-run write paths (chat thread + attachment
+round-trip, memory dedup, `saveTasks` insert-then-refuse, `client_hint` normalization,
+reminders ignoring the Papelera). It never touches the real DB and never calls the API.
+Written because 1.7.1 and earlier had **no way to notice** that a fresh install was broken
+— see invariant 17. When you add a column or a first-run path, extend it; a check that
+can't go red is worth nothing, so confirm a new assertion fails before you make it pass.
+
+**Testing a fresh install end-to-end** (the closest thing to a new employee's Mac, and
+safe while the owner's app is running — a fresh `DATA_DIR` has no paired WhatsApp session,
+so `startAllSessions()` never fires and no Chrome is launched):
+
+```bash
+DATA_DIR=/tmp/fresh PORT=4399 npx tsx src/server/index.ts
+```
+
+Stop it with **SIGTERM, never `kill -9`** (golden rule 1 applies to scratch instances too).
 
 Static frontend changes can be verified by opening `public/index.html` directly in a
 browser (no server, no WhatsApp). Read-only SQL against the real DB is safe with
@@ -428,21 +546,42 @@ Delete the harness when done — it must not end up in the repo or in a release 
 
 **Ship a code update** (JS/HTML/CSS — the normal path):
 
-1. Bump `version` in `package.json`.
-2. `MIN_SHELL_VERSION=0.1.0 npm run release -- "notas en español"`
-3. Verify: `curl -s https://api.github.com/repos/Cherynoble/asistente-de-tareas/releases/latest | grep tag_name`
+1. `npx tsc --noEmit && node --check public/app.js && npm run smoke` — all three.
+2. Bump `version` in `package.json`.
+3. `MIN_SHELL_VERSION=0.1.0 npm run release -- "notas en español"`
+4. Verify: `curl -s https://api.github.com/repos/Cherynoble/asistente-de-tareas/releases/latest | grep tag_name`
    (the API's `latest` can lag ~1 min behind the publish)
-4. Dad: **Ajustes → Buscar actualizaciones** → installs, relaunches, DB untouched.
+5. **Every install** clicks **Ajustes → Buscar actualizaciones** → installs, relaunches, DB
+   untouched. One release serves all silos, but each one updates on its own — nobody is
+   updated automatically, so tell people, and expect version drift until §12's
+   check-on-launch exists.
 
 **Ship a new `.app`** (only for `electron/*.cjs` or native/dep changes): `npm run dist`,
-AirDrop, then `xattr -cr "…/Asistente de Tareas.app"` on his Mac. Bump `MIN_SHELL_VERSION`
-to force it.
+AirDrop **to each Mac**, then `xattr -cr "…/Asistente de Tareas.app"` on each. Bump
+`MIN_SHELL_VERSION` to force it. This is the expensive path in silo mode — batch shell
+changes rather than shipping them one at a time.
 
-⚠️ **Pushing to GitHub does not update Dad's app.** Only `npm run release` does.
+⚠️ **Pushing to GitHub does not update anyone's app.** Only `npm run release` does.
 
 ---
 
 ## 11. Recently fixed — do not regress
+
+**1.7.2** — the pre-silo audit. Everything here was found by reviewing the repo against
+"can this ship to several Macs", and every item was reproduced before being fixed.
+
+| Fix | Where |
+|---|---|
+| **The Chat tab was dead on every fresh install since 0.3.0.** `chat_messages.attachments` existed only as an `ensureColumn` migration, never in `schema.ts`; `migrate()` skips tables that don't exist yet, so a new DB never got it and `POST /api/chat` 500'd with *"table chat_messages has no column named attachments"* on the first message. Invisible until now because the only DB ever tested was the migrated original | `db/schema.ts` · invariant 17 |
+| Trashed tasks were still "open" to the reminders engine — `openTasks()` lacked `deleted_at IS NULL`, so a task in the Papelera nudged forever and inflated the morning digest. Same class as the 1.7.1 `loadOpenTasks` fix, which closed the extractor's copy of this query and missed this one | `notify/reminders.ts` |
+| 40 of 60 routes had no try/catch, so any throw fell through to Express's **default** handler: an HTML stack trace leaking absolute filesystem paths, and a frontend that calls `.json()` on everything dying with `Unexpected token '<'`. Added a 4-arg `/api` error handler returning `{ error }` | `server/index.ts` |
+| `?limit=abc` reached SQLite as `NaN` and 500'd the route — the documented `Math.min(Math.max(Number(x)…))` clamp propagates NaN. Replaced with `clampNum()` at all 8 sites | `server/index.ts` · invariant 20 |
+| Bulk `purge` hard-deleted by id with **no Trash check** on either tasks or clients — the one irreversible action in the API, unguarded | `server/index.ts` · invariant 19 |
+| A failed chat turn left an orphan empty thread (created before the call, never rolled back); every retry stacked another. Reproduced on a fresh install | `server/index.ts` · invariant 21 |
+| `client_hint` was written inconsistently — handles by the chat agent, model-produced display names by the extractor. 9 of 13 distinct values in the live DB were not handles (chat titles, group names, space-formatted phone numbers that can never match). Now normalized through one shared `resolveClientHint()`, which also matches on digits | `names.ts`, `extract/pipeline.ts` |
+| No index for the Mensajes pager: it filters `chat_id` but the planner used `idx_messages_ts` and scanned. Added `idx_messages_chat_ts` | `db/schema.ts` |
+| `tasks.client_id` documented as reserved-and-never-written, so nobody writes a JOIN against it expecting rows | `db/schema.ts` |
+| **New:** `npm run smoke` — the fresh-install gate that would have caught the first two items | `scripts/smoke-fresh-install.ts` |
 
 **1.7.1**
 
@@ -501,6 +640,62 @@ colours** without re-sampling (§10).
 
 ## 12. Open items / candidate next work
 
+**Silo rollout — ranked, the ones that actually matter**
+
+- **First-run scope gate (privacy).** Highest priority. Today `empty = all chats`, so a
+  default install reads the person's entire personal message history (§1a). The semantics
+  weren't flipped because that would silently change behaviour on existing installs; the
+  fix is a first-run state that refuses to import until a selection exists, leaving
+  `empty = all` meaningful only for already-configured installs.
+- **Apple Developer ID + notarization ($99/yr).** Removes the `xattr -cr` Terminal step
+  from every machine, which is the single worst part of the install and the one most likely
+  to generate support calls. Best money available here.
+- **Update integrity.** `electron/updater.cjs` validates the zip's **URL** but not its
+  contents — no hash, no signature. With one install that's a small risk; across N machines
+  a GitHub compromise is code execution on all of them simultaneously. Put a SHA-256 in the
+  manifest and verify it before `swapIn`.
+- **Version drift.** Updates are opt-in (the user clicks "Buscar actualizaciones"), so N
+  machines will sit on N versions with no way to see which. An update check on launch — even
+  just a badge — is cheap and worth it now.
+- **`electron/*.cjs` changes are O(N) manual AirDrops** (invariant 7). Unchanged by silo
+  mode, but it now costs N times as much. Keep shell changes rare and batched.
+- **No health visibility.** Nothing reports that someone's WhatsApp has been disconnected
+  for a week or that their processing queue is backed up; `startup.log` is local-only.
+  Ajustes → Diagnóstico is the place to surface "last successful ingest / WA state / queue
+  depth" prominently.
+- **Per-install API keys and cost.** No budget, no attribution, no rate limit. One employee
+  clicking "Procesar" through a large backlog is real money. Separate keys per install
+  (§1a) at minimum.
+- **The morning cron only fires if the Mac is awake at that minute.** `node-cron` does not
+  catch up a missed run. Fine on the always-on Mac Studio, unreliable on a laptop that
+  sleeps — which is what most employees have. The launch digest partly covers it; a
+  "missed yesterday's run" catch-up on boot would close it.
+
+**Performance — fine at today's ~17k messages, not at a year of team history**
+
+- **Vision descriptions are computed, used once and discarded.** `enrichVision` folds the
+  text into `r.body` in memory; the row is then marked processed and the description is
+  gone. Persisting it to a column would make attachments searchable, feed the chat agent
+  for free, and stop re-analysis paying twice. Cheapest high-value change in the codebase.
+- **`nameMap()` is uncached and called per request** — three full scans of `messages`
+  (`DISTINCT sender`, plus `GROUP BY sender, sender_name` over every row) on every Mensajes
+  page, attachment list and chat turn. Needs a TTL cache invalidated on client writes (the
+  live-rename path in `app.js` depends on it being fresh).
+- **No FTS.** `search_messages` and the Mensajes search are `body LIKE '%q%'` full scans.
+  SQLite FTS5 over `body` is the standard fix.
+
+**Chat agent cost/UX**
+
+- **`buildContext()` runs inside the 5-turn tool loop**, so 100 tasks + all clients + 150
+  messages + 40 memories are re-queried and re-sent on every iteration.
+- **Prompt caching is currently impossible**: the system prompt starts with
+  `new Date().toString()` (seconds included), so every call has a unique prefix. Move the
+  timestamp into the user turn and mark the static block `cache_control`.
+- **No streaming and no timeout** — a tool loop with two `read_attachment` calls can run
+  ~60s with no feedback, which reads as a frozen app.
+
+**Pre-existing**
+
 - **Not yet shipped to Dad:** the updater URL allowlist (needs a new `.app`).
 - **Voice notes now play in the preview overlay, not in the gallery tile** (§6a). If that
   turns out to be annoying in daily use, the alternative is letting audio cards span two
@@ -511,13 +706,13 @@ colours** without re-sampling (§10).
 - **No automated coverage of the UI.** The offline harness in §10 is rebuilt by hand each
   time; the geometry assertions it produces (tile fills its slot, corner controls land at
   the corner, contrast ≥ 4.5:1 in both themes) are the obvious thing to make permanent.
-- **Processing ignores chat selection** for already-imported messages (§5).
-- **No automated tests.** `tsc` + `node --check` + manual is the whole safety net;
-  the pipeline and reminder logic are the obvious first candidates for unit tests. The
-  1.7.1 dedup was verified with a throwaway 8-scenario script run as
-  `DATA_DIR=<scratch> npx tsx test.ts` against a fresh scratch DB (seed stub `messages`
-  rows first — `tasks.source_message_id` has an enforced FK); that recipe is the natural
-  seed for a real test suite.
+- **Processing ignores chat selection** for already-imported messages (§5). Worth revisiting
+  now: under the privacy rules in §1a, a chat someone *deselects* should arguably stop being
+  analyzed, not just stop being imported.
+- **Backend test coverage is thin.** `npm run smoke` (1.7.2) covers fresh-install schema
+  parity and the first-run write paths — the natural next additions are the pipeline's
+  batching/vision-budget logic and the reminder throttle, both of which are pure functions
+  over a scratch DB and would fit the same file.
 - **iMessage temp-path attachment loss** is unrecoverable by design — `chat.db` points at
   purged `/var/folders/…` paths. Count them with the SQL in `DEBUGGING.md` §6.
 - **WhatsApp on-demand media is unreliable for old messages** (`getMessageById` fails far

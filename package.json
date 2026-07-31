@@ -1,6 +1,6 @@
 {
   "name": "dads-app",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "private": true,
   "type": "module",
   "description": "Task tracker that ingests iMessage + WhatsApp and proposes tasks via Claude",
@@ -13,6 +13,7 @@
     "extract": "tsx src/extract/run.ts",
     "vision:test": "tsx src/extract/vision-test.ts",
     "dashboard": "tsx src/server/index.ts",
+    "smoke": "tsx scripts/smoke-fresh-install.ts",
     "wa:test": "tsx src/ingest/whatsapp/test.ts",
     "translate:tasks": "tsx src/extract/translate-tasks.ts",
     "build": "tsc -p tsconfig.build.json",

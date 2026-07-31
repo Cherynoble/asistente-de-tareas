@@ -47,3 +47,41 @@ export function nameMap(): Record<string, string> {
   for (const [h, n] of Object.entries(manual)) if (!out[h]) out[h] = n;
   return out;
 }
+
+/**
+ * Resolve whatever a task-creating path calls "the client" down to a HANDLE when
+ * one matches, else keep the text as-is.
+ *
+ * `tasks.client_hint` is the only real link between a task and a contact
+ * (`tasks.client_id` has never been written by any code path). It has to be
+ * written consistently or that link silently rots: before 1.7.2 the chat agent
+ * stored handles here while the extractor stored whatever *display name* the
+ * model produced, so the same client accumulated several spellings and the
+ * Clientes tab listed each unresolvable one as a phantom contact with 0
+ * messages. Observed in the live DB: 9 of 13 distinct hints were not handles —
+ * chat titles ("Seniors 2024"), group names, and space-formatted phone numbers
+ * ("+57 321 4274369") that can never match the stored handle format.
+ *
+ * Digits-only comparison is what catches that last case: a hint of
+ * "+57 321 4274369" and a handle of "573214274369@c.us" are the same person.
+ */
+export function resolveClientHint(client: string): string {
+  const c = client.trim();
+  if (!c) return '';
+  const names = nameMap();
+  const lc = c.toLowerCase();
+  const hintDigits = c.replace(/\D/g, '');
+
+  let partial = '';
+  let byDigits = '';
+  for (const [handle, name] of Object.entries(names)) {
+    if (name.toLowerCase() === lc) return handle; // exact name → handle
+    if (!partial && name.toLowerCase().includes(lc)) partial = handle;
+    if (!byDigits && hintDigits.length >= 7) {
+      const hd = handle.replace(/\D/g, '');
+      // Compare on the last 9 digits so a country-code difference doesn't miss.
+      if (hd.length >= 7 && hd.slice(-9) === hintDigits.slice(-9)) byDigits = handle;
+    }
+  }
+  return partial || byDigits || c;
+}
