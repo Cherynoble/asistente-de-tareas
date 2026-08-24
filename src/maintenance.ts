@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { db } from './db/index.js';
+import { splitAtt } from './attachments.js';
 
 /**
  * One-time (idempotent) cleanup of WhatsApp stickers. Stickers carry no task
@@ -24,7 +25,7 @@ export function purgeStickers(): number {
   if (!rows.length) return 0;
 
   for (const r of rows) {
-    for (const p of (r.paths || '').split('||')) {
+    for (const p of splitAtt(r.paths)) {
       const f = p.trim();
       if (!f) continue;
       try {

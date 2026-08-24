@@ -32,7 +32,7 @@ const { createThread, addMessage, threadMessages, saveMemory, listMemories } = a
 const { saveTasks } = await import('../src/extract/pipeline.js');
 const { openTasks, buildDigest, runNudgeSweep } = await import('../src/notify/reminders.js');
 const { scheduleReminder, listReminders } = await import('../src/notify/scheduled.js');
-const { nameMap, resolveClientHint } = await import('../src/names.js');
+const { nameMap, resolveClientHint, invalidateNameCache } = await import('../src/names.js');
 const { computeDiagnostics } = await import('../src/diagnostics.js');
 const { getSetting, setSetting, listWaAccounts } = await import('../src/settings.js');
 
@@ -148,6 +148,10 @@ check('client_hint is normalized to a handle when one resolves', () => {
        VALUES ('+575550000001@c.us', 'Cliente Uno', 'toallas', ?, ?)`,
     )
     .run(now, now);
+  // nameMap() is cached (30s TTL); a DIRECT db write bypasses the API routes
+  // that invalidate it, so this script must do so itself — as must any future
+  // code path that writes clients without going through the routes.
+  invalidateNameCache();
   assert(
     resolveClientHint('Cliente Uno') === '+575550000001@c.us',
     'an exact client name should resolve to its handle',

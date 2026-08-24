@@ -13,6 +13,8 @@
     "extract": "tsx src/extract/run.ts",
     "vision:test": "tsx src/extract/vision-test.ts",
     "dashboard": "tsx src/server/index.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
     "smoke": "tsx scripts/smoke-fresh-install.ts",
     "wa:test": "tsx src/ingest/whatsapp/test.ts",
     "translate:tasks": "tsx src/extract/translate-tasks.ts",
@@ -54,6 +56,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "node-cron": "^4.5.0",
+    "pdfjs-dist": "^6.2.108",
     "qrcode": "^1.5.4",
     "whatsapp-web.js": "^1.34.7"
   },

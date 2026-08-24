@@ -1,5 +1,4 @@
-import { config } from '../config.js';
-import { anthropicClient } from '../settings.js';
+import { aiJson, aiName } from '../ai/index.js';
 import type {
   ClientContext,
   ExistingTask,
@@ -50,7 +49,7 @@ const SCHEMA = {
   },
   required: ['tasks'],
   additionalProperties: false,
-} as const;
+};
 
 interface RawTask {
   title: string;
@@ -60,8 +59,13 @@ interface RawTask {
   client: string;
 }
 
-export class ClaudeExtractor implements TaskExtractor {
-  readonly name = `claude:${config.model}`;
+/**
+ * Task extraction over the CONFIGURED provider (Ajustes → Proveedor de IA) —
+ * Anthropic by default, or any OpenAI-compatible model. Formerly
+ * `ClaudeExtractor`; the prompt and output contract are unchanged.
+ */
+export class ModelExtractor implements TaskExtractor {
+  readonly name = aiName();
 
   async proposeTasks(
     messages: IngestedMessage[],
@@ -86,24 +90,21 @@ export class ClaudeExtractor implements TaskExtractor {
       .map((m) => `#${m.id} [${m.direction}] ${m.chatName ?? m.sender ?? '?'}: ${m.body}`)
       .join('\n');
 
-    const resp = await anthropicClient().messages.create({
-      model: config.model,
-      max_tokens: 4000,
-      system: SYSTEM,
-      messages: [
-        {
-          role: 'user',
-          content: `${clientCtx}${openCtx}Chat transcript (oldest first). Each line is prefixed with #<id>:\n\n${transcript}`,
-        },
-      ],
-      output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-    });
+    const parsed = await aiJson<{ tasks?: RawTask[] }>(
+      {
+        system: SYSTEM,
+        maxTokens: 4000,
+        messages: [
+          {
+            role: 'user',
+            content: `${clientCtx}${openCtx}Chat transcript (oldest first). Each line is prefixed with #<id>:\n\n${transcript}`,
+          },
+        ],
+      },
+      SCHEMA,
+    );
 
-    const text = resp.content.find((b) => b.type === 'text');
-    if (!text || text.type !== 'text') return [];
-    const parsed = JSON.parse(text.text) as { tasks?: RawTask[] };
-
-    return (parsed.tasks ?? []).map((t) => ({
+    return (parsed?.tasks ?? []).map((t) => ({
       title: t.title,
       detail: t.detail,
       sourceMessageId: Number.isFinite(t.source_msg_id) ? t.source_msg_id : null,

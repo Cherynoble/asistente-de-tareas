@@ -451,13 +451,24 @@
         </div>
 
         <div class="setblock">
-          <h3><svg class="ico"><use href="#i-key" /></svg>Clave de API de Anthropic</h3>
+          <h3><svg class="ico"><use href="#i-key" /></svg>Proveedor de IA</h3>
+          <p class="hint">La IA que analiza mensajes, lee archivos y responde en el Chat. Anthropic (Claude) es la opción probada; también puedes usar cualquier proveedor compatible con OpenAI (Kimi, DeepSeek, Qwen, GLM, Ollama…).</p>
           <p class="hint" id="key-status"></p>
           <div class="setrow">
-            <input id="api-key" type="password" placeholder="sk-ant-…" autocomplete="off" />
-            <button id="save-key" class="primary">Guardar clave</button>
+            <label>Proveedor <select id="ai-provider"></select></label>
+            <label>Modelo <input id="ai-model" type="text" placeholder="modelo" style="width: 12em" autocomplete="off" /></label>
+            <label class="check"><input id="ai-vision" type="checkbox" /> El modelo acepta imágenes</label>
+          </div>
+          <div class="setrow" id="ai-baseurl-row">
+            <label>URL base <input id="ai-baseurl" type="text" placeholder="https://…/v1" style="width: 22em" autocomplete="off" /></label>
+          </div>
+          <div class="setrow">
+            <input id="api-key" type="password" placeholder="clave de API" autocomplete="off" />
+            <button id="save-key" class="primary">Guardar</button>
+            <button id="ai-test">Probar conexión</button>
             <span id="key-saved" class="saved"></span>
           </div>
+          <p class="hint" id="ai-test-result" style="margin: 0"></p>
         </div>
 
         <div class="setblock">
@@ -519,6 +530,18 @@
       <div class="ql-caption"></div>
     </div>
 
-    <script src="/app.js"></script>
+    <!-- Classic scripts sharing one global scope — ORDER MATTERS (mirrors the
+         old single app.js; app-init.js must stay last). -->
+    <script src="/app-core.js"></script>
+    <script src="/app-tasks.js"></script>
+    <script src="/app-pipeline.js"></script>
+    <script src="/app-clients.js"></script>
+    <script src="/app-attachments.js"></script>
+    <script src="/app-messages.js"></script>
+    <script src="/app-trash.js"></script>
+    <script src="/app-chat.js"></script>
+    <script src="/app-settings.js"></script>
+    <script src="/app-whatsapp.js"></script>
+    <script src="/app-init.js"></script>
   </body>
 </html>

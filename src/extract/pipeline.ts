@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { db } from '../db/index.js';
+import { splitAtt } from '../attachments.js';
 import { resolveClientHint } from '../names.js';
 import { SEL_CLOSE, SEL_OPEN } from '../chat/store.js';
-import { ClaudeExtractor } from './claude.js';
+import { ModelExtractor } from './extractor.js';
 import { describeAttachment } from './vision.js';
 import type { ClientContext, ExistingTask, IngestedMessage, ProposedTask } from './types.js';
 
@@ -118,8 +119,13 @@ export function normTitle(t: string): string {
  * Two rules, checked at insert time (better-sqlite3 is synchronous, so
  * overlapping runs can't interleave between check and insert):
  *  1. An OPEN task (proposed/todo/waiting, not archived/trashed) with the same
- *     normalized title already exists → skip. Done tasks don't block: a client
- *     re-requesting something finished is a genuinely new task.
+ *     normalized title AND the same client already exists → skip. "Same client"
+ *     is deliberate: two DIFFERENT clients both asking for "cotizar papel
+ *     higiénico" are two real tasks — keying on the title alone silently
+ *     dropped the second client's request. A missing hint on either side still
+ *     matches conservatively (the old behavior), so hint-less proposals can't
+ *     stack duplicates. Done tasks don't block: a client re-requesting
+ *     something finished is a genuinely new task.
  *  2. A task in ANY state citing the same source message with the same
  *     normalized title → skip. Re-analyzing a message must not resurrect a task
  *     the owner already completed, archived or trashed.
@@ -136,27 +142,51 @@ export function saveTasks(tasks: ProposedTask[]): { saved: ProposedTask[]; dupli
      VALUES (?, ?, 'proposed', ?, ?, ?, ?, ?)`,
   );
   const selectOpen = d.prepare(
-    `SELECT id, title, status FROM tasks
+    `SELECT id, title, status, client_hint FROM tasks
      WHERE status IN ('proposed','todo','waiting') AND archived_at IS NULL AND deleted_at IS NULL`,
   );
   const selectBySource = d.prepare(
     `SELECT id, title, status, archived_at, deleted_at FROM tasks WHERE source_message_id = ?`,
   );
-  type Twin = { id: number; title: string; status: string; archived_at?: number | null; deleted_at?: number | null };
+  type Twin = {
+    id: number;
+    title: string;
+    status: string;
+    client_hint?: string;
+    archived_at?: number | null;
+    deleted_at?: number | null;
+  };
   const stateOf = (e: Twin) => (e.deleted_at ? 'trash' : e.archived_at ? 'archived' : e.status);
+  // Empty on either side = conservative match; both present = must be the same
+  // client. Stored hints are already normalized (every write path goes through
+  // resolveClientHint), so a case-insensitive compare is enough.
+  const hintMatches = (a: string, b: string | undefined) => {
+    const ha = a.trim().toLowerCase();
+    const hb = (b ?? '').trim().toLowerCase();
+    return !ha || !hb || ha === hb;
+  };
 
   d.transaction(() => {
     // Loaded inside the transaction, and updated per insert so rule 1 also
     // dedups within a single model response.
-    const openByTitle = new Map<string, Twin>();
+    const openByTitle = new Map<string, Twin[]>();
     for (const e of selectOpen.all() as Twin[]) {
       const k = normTitle(e.title);
-      if (k && !openByTitle.has(k)) openByTitle.set(k, e);
+      if (!k) continue;
+      const list = openByTitle.get(k) ?? [];
+      list.push(e);
+      openByTitle.set(k, list);
     }
     for (const t of tasks) {
       const key = normTitle(t.title);
+      // Normalize the model's free-text client name to a handle when one matches,
+      // so every task-creating path writes client_hint the same way (see
+      // resolveClientHint in names.ts). Unresolvable hints — a group chat title,
+      // a one-off name — pass through unchanged and stay useful as a label.
+      // Resolved BEFORE the dedup check so rule 1 compares like with like.
+      const hint = resolveClientHint(t.clientHint ?? '');
       const twin =
-        (key && openByTitle.get(key)) ||
+        (key && (openByTitle.get(key) ?? []).find((e) => hintMatches(hint, e.client_hint))) ||
         (t.sourceMessageId != null
           ? (selectBySource.all(t.sourceMessageId) as Twin[]).find((e) => normTitle(e.title) === key)
           : undefined);
@@ -164,14 +194,13 @@ export function saveTasks(tasks: ProposedTask[]): { saved: ProposedTask[]; dupli
         duplicates.push({ title: t.title, existingId: twin.id, existingTitle: twin.title, existingState: stateOf(twin) });
         continue;
       }
-      // Normalize the model's free-text client name to a handle when one matches,
-      // so every task-creating path writes client_hint the same way (see
-      // resolveClientHint in names.ts). Unresolvable hints — a group chat title,
-      // a one-off name — pass through unchanged and stay useful as a label.
-      const hint = resolveClientHint(t.clientHint ?? '');
       const info = insert.run(t.title, t.detail, hint, t.sourceMessageId, t.sourceQuote ?? '', now, now);
       saved.push({ ...t, clientHint: hint });
-      if (key) openByTitle.set(key, { id: Number(info.lastInsertRowid), title: t.title, status: 'proposed' });
+      if (key) {
+        const list = openByTitle.get(key) ?? [];
+        list.push({ id: Number(info.lastInsertRowid), title: t.title, status: 'proposed', client_hint: hint });
+        openByTitle.set(key, list);
+      }
     }
   })();
   return { saved, duplicates };
@@ -179,8 +208,8 @@ export function saveTasks(tasks: ProposedTask[]): { saved: ProposedTask[]; dupli
 
 /** Attachments the UI can preview via /api/attachment. */
 function renderableAttachments(r: Row): { index: number; mime: string }[] {
-  const mimes = r.attachment_mimes ? r.attachment_mimes.split('||') : [];
-  const paths = r.attachment_paths ? r.attachment_paths.split('||') : [];
+  const mimes = splitAtt(r.attachment_mimes);
+  const paths = splitAtt(r.attachment_paths);
   const out: { index: number; mime: string }[] = [];
   mimes.forEach((mime, index) => {
     const hasFile = !!(paths[index] && paths[index].trim());
@@ -255,9 +284,9 @@ async function enrichVision(
   let used = 0;
   for (const r of rows) {
     if (used >= budget) break;
-    const mimes = r.attachment_mimes ? r.attachment_mimes.split('||') : [];
-    const names = r.attachment_names ? r.attachment_names.split('||') : [];
-    const paths = r.attachment_paths ? r.attachment_paths.split('||') : [];
+    const mimes = splitAtt(r.attachment_mimes);
+    const names = splitAtt(r.attachment_names);
+    const paths = splitAtt(r.attachment_paths);
     const described: string[] = [];
 
     for (let k = 0; k < mimes.length; k++) {
@@ -308,7 +337,7 @@ export async function runExtraction(opts: ExtractionOptions = {}): Promise<{ pro
 
   if (vision) await enrichVision(rows, cap, emit);
 
-  const extractor = new ClaudeExtractor();
+  const extractor = new ModelExtractor();
   const tasks = await extractor.proposeTasks(toMessages(rows), loadClients(), loadOpenTasks());
   const { saved } = saveTasks(tasks);
 
@@ -374,7 +403,7 @@ export async function processNewMessages(opts: ProcessOptions = {}): Promise<{
     const total = countUnprocessed();
     emit({ type: 'start', total, vision });
 
-    const extractor = new ClaudeExtractor();
+    const extractor = new ModelExtractor();
     const selectBatch = d.prepare(
       `SELECT ${ROW_COLS} FROM messages WHERE processed = 0 ORDER BY ts DESC LIMIT ?`,
     );
@@ -472,7 +501,7 @@ export async function analyzeSelection(
   const cap = Math.min(Math.max(opts.visionCap ?? SELECTION_MAX_FILES, 0), SELECTION_MAX_FILES);
   const filesAnalyzed = opts.vision === false ? 0 : await enrichVision(rows, cap, () => {});
 
-  const extractor = new ClaudeExtractor();
+  const extractor = new ModelExtractor();
   const { saved, duplicates } = saveTasks(
     await extractor.proposeTasks(toMessages(rows), loadClients(), loadOpenTasks()),
   );
@@ -524,7 +553,7 @@ export function selectionTranscript(ids: number[], resolveName: (handle: string)
       day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
     });
     const who = r.direction === 'outgoing' ? 'Yo' : resolveName(r.sender ?? '') || r.senderName || r.sender || '?';
-    const files = r.attachment_names ? ` [archivos: ${r.attachment_names.split('||').filter(Boolean).join(', ')}]` : '';
+    const files = r.attachment_names ? ` [archivos: ${splitAtt(r.attachment_names).filter(Boolean).join(', ')}]` : '';
     // A body containing the literal selection sentinels would terminate the
     // collapsed block early in the chat UI, spilling the rest of the transcript
     // into the visible bubble. Message bodies are untrusted text; strip them.

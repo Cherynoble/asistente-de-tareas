@@ -52,6 +52,45 @@ We moved past "feature-complete" into adding features, with proper infra:
 - **Current version 1.7.0** (shell still 0.1.x; all updates ship online via GitHub Releases,
   minShellVersion 0.1.0 since no new deps). Bump version + `MIN_SHELL_VERSION=0.1.0 npm run
   release -- "notas"` to publish; Dad clicks "Buscar actualizaciones".
+- **Multi-provider AI layer (2026-08-24, unreleased/experimental)** — `src/ai/` is now the
+  ONLY place that talks to an AI vendor: neutral types + retry/backoff (`types.ts`), an
+  Anthropic adapter (official SDK), and a fetch-based OpenAI-compatible adapter covering
+  Kimi/Moonshot, DeepSeek, Qwen, GLM, Ollama and custom endpoints (presets in
+  `providers.ts`; per-provider settings keys `ai_provider`, `ai_model:<id>`, `ai_key:<id>`,
+  `ai_base_url:<id>`, `ai_vision:<id>`; anthropic reuses `anthropic_api_key`). All five
+  former call sites (extractor — `extract/claude.ts` is now `extract/extractor.ts` with
+  `ModelExtractor` —, vision, chat agent + tools, classify, translate) go through it; the
+  `getApiKey()` route gates became `hasAiKey()`. Ajustes → "Proveedor de IA" has the
+  provider picker + **Probar conexión** (`GET/POST /api/ai`, `POST /api/ai/test`). PDFs on
+  non-Anthropic providers are locally text-extracted via **pdfjs-dist** (pure JS; NEW DEP →
+  the next shipped release that relies on it needs a fresh `.app` / MIN_SHELL_VERSION bump,
+  though the code degrades gracefully if the package is missing). Status: experiment phase —
+  Anthropic stays the default; validate extraction quality (Mensajes → Analizar is the A/B
+  harness) before shipping. ⚠️ Found while testing: the dev `.env` ANTHROPIC_API_KEY is
+  invalid (401 straight from the API) — replace it or paste a key in Ajustes.
+- **Codebase-health pass (2026-08-24, unreleased, same batch as the AI layer):**
+  (1) `src/server/index.ts` split: routes now live in `src/server/routes/{tasks,clients,
+  chat,whatsapp,messages,settings}.ts` + `helpers.ts` (clampNum, SSE, includedChats,
+  attachmentEntries — ONE copy of the attachment decoration that used to exist 3×) +
+  `lifecycle.ts` (cron/nudge/wake; cron failures now fire a native "análisis nocturno
+  falló" banner); index.ts is just middleware + mounts + listen and stays the Electron
+  entry. (2) `public/app.js` split into 11 ordered CLASSIC scripts `app-*.js` sharing one
+  global scope (`app-init.js` must stay last; order in index.html mirrors the old file).
+  (3) `nameMap()` cached 30 s + `invalidateNameCache()` on client writes (direct DB writes
+  must call it themselves — see the smoke test). (4) Task dedup is now per-client: same
+  normalized title for a DIFFERENT client is a real task (empty hint still matches
+  conservatively); applies to saveTasks rule 1 AND chat create_task. (5) `src/attachments.ts`
+  is the one definition of the '||' lists (joinAtt sanitizes embedded separators).
+  (6) WhatsApp persist() failures now log (first + every 50th) instead of silently dropping
+  messages. (7) **FTS5 trigram search** (`messages_fts`, substring + CJK semantics) behind
+  `bodyFilterSql()` — used by Mensajes search/filter and the chat agent's search_messages;
+  one-time build gated by the `fts_built` settings marker (row-count checks CANNOT detect
+  an unbuilt external-content index); falls back to LIKE if fts5 is missing. (8) Fixed a
+  real pager bug the new tests caught: 'around' with a message anchor duplicated rows
+  sharing the anchor timestamp (runFrom now uses the composite (ts,id) cursor). (9) Tests:
+  `npm test` (node:test via tsx, tests/*.test.ts — dedup rules, pager cursors, FTS,
+  attributedBody decoder, AI adapters against a mock server, retry policy) + `.github/
+  workflows/ci.yml` (typecheck + tests + smoke on push/PR).
 
 ## 🔖 HANDOFF STATE (2026-06-25) — earlier baseline
 The app is **feature-complete and bundled**; we're in the final "iron out kinks" phase.

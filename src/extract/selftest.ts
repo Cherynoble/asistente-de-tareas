@@ -1,4 +1,4 @@
-import { ClaudeExtractor } from './claude.js';
+import { ModelExtractor } from './extractor.js';
 import type { IngestedMessage } from './types.js';
 
 // Validates the extractor end-to-end on synthetic trading-company messages:
@@ -23,7 +23,7 @@ const messages: IngestedMessage[] = [
   msg(7, 'Mr. Chen', 'outgoing', 'ok'),
 ];
 
-const extractor = new ClaudeExtractor();
+const extractor = new ModelExtractor();
 const tasks = await extractor.proposeTasks(messages);
 
 console.log(`\n${extractor.name} proposed ${tasks.length} task(s) from 7 synthetic messages:\n`);

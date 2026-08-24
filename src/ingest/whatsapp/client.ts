@@ -6,6 +6,7 @@ import type { Message } from 'whatsapp-web.js';
 import QRCode from 'qrcode';
 import { config } from '../../config.js';
 import { db } from '../../db/index.js';
+import { sanitizeAttComponent } from '../../attachments.js';
 import {
   getSelectedWaChats,
   listWaAccounts,
@@ -111,6 +112,8 @@ class WaAccount {
   private lastProgressAt = 0;
   private lastLoadingPct = -1;
   private syncRecycles = 0;
+  // Count of persist() failures since this process started (see the catch there).
+  private persistFailures = 0;
 
   constructor(meta: WaAccountMeta) {
     this.id = meta.id;
@@ -449,12 +452,23 @@ class WaAccount {
           ts: (msg.timestamp || 0) * 1000,
           now: Date.now(),
           hasAtt: hasMedia ? 1 : 0,
-          mimes,
-          names,
-          paths,
+          mimes: sanitizeAttComponent(mimes),
+          names: sanitizeAttComponent(names),
+          paths: sanitizeAttComponent(paths),
         });
       return info.changes;
-    } catch {
+    } catch (err) {
+      // This catch used to be silent — a systematic insert failure (a future
+      // schema drift, a locked DB) would drop EVERY incoming message with zero
+      // evidence. Log the first failure of a burst and every 50th after, so the
+      // startup log shows data loss without flooding it during an outage.
+      this.persistFailures += 1;
+      if (this.persistFailures === 1 || this.persistFailures % 50 === 0) {
+        console.error(
+          `[whatsapp:${this.id}] persist failed (${this.persistFailures}× since start):`,
+          err instanceof Error ? err.message : err,
+        );
+      }
       return 0;
     }
   }

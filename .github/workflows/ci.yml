@@ -1,0 +1,32 @@
+# CI: typecheck + unit tests + the fresh-install smoke test on every push/PR.
+# The smoke test is the regression net for silo mode (every employee Mac is a
+# fresh install); the unit tests cover the logic that fails silently (dedup,
+# pager cursors, attachment lists, the AI adapters).
+#
+# macOS-only pieces degrade cleanly on the Linux runner: notifications no-op off
+# darwin, and nothing here touches chat.db or WhatsApp.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # whatsapp-web.js drags in puppeteer; don't download a 150 MB Chrome we
+      # never launch in CI. Same for the Electron binary.
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run smoke
