@@ -54,6 +54,66 @@ function migrate(d: Database.Database): void {
   ensureColumn(d, 'chat_messages', 'attachments', `TEXT NOT NULL DEFAULT ''`);
 }
 
+let _ftsAvailable = false;
+
+/** Whether the messages_fts full-text index exists and can be queried. Search
+ *  code falls back to LIKE scans when this is false. */
+export function ftsAvailable(): boolean {
+  return _ftsAvailable;
+}
+
+/**
+ * Full-text index over messages.body, for the Mensajes search and the chat
+ * agent's search_messages tool — a LIKE over every body is a full-table scan
+ * that gets slow as a silo's history grows into six figures.
+ *
+ * fts5 with the TRIGRAM tokenizer, specifically: it matches substrings (same
+ * semantics the LIKE search always had) and works on Chinese text, which has no
+ * word boundaries for the default tokenizer to find. External-content table +
+ * triggers keep it in sync with inserts/deletes (sticker purges included); the
+ * first boot on an existing DB does a one-time 'rebuild' (see the marker note
+ * below). Best-effort: if this SQLite build lacks fts5/trigram, search silently
+ * stays on LIKE.
+ */
+function ensureFts(d: Database.Database): void {
+  try {
+    d.exec(/* sql */ `
+      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
+        USING fts5(body, content='messages', content_rowid='id', tokenize='trigram');
+      CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+        INSERT INTO messages_fts(rowid, body) VALUES (new.id, new.body);
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, body) VALUES ('delete', old.id, old.body);
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE OF body ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, body) VALUES ('delete', old.id, old.body);
+        INSERT INTO messages_fts(rowid, body) VALUES (new.id, new.body);
+      END;
+    `);
+    // A row-count comparison can NOT detect an unbuilt index here: on an
+    // external-content fts5 table, SELECTs (including COUNT) are answered from
+    // the content table, so they "match" even when the index is empty. Use an
+    // explicit one-time marker instead; the triggers keep it in sync after.
+    const marker = d
+      .prepare(`SELECT value FROM settings WHERE key = 'fts_built'`)
+      .get() as { value: string } | undefined;
+    if (marker?.value !== '1') {
+      const msgs = (d.prepare('SELECT COUNT(*) AS n FROM messages').get() as { n: number }).n;
+      d.exec(`INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')`);
+      d.prepare(
+        `INSERT INTO settings (key, value) VALUES ('fts_built', '1')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      ).run();
+      console.log(`[db] built messages_fts (${msgs} rows)`);
+    }
+    _ftsAvailable = true;
+  } catch (err) {
+    _ftsAvailable = false;
+    console.warn('[db] fts unavailable, search falls back to LIKE:', err instanceof Error ? err.message : err);
+  }
+}
+
 /** The app's own database (data/app.db), created on first use. */
 export function db(): Database.Database {
   if (_db) return _db;
@@ -67,6 +127,7 @@ export function db(): Database.Database {
   // and SCHEMA creates everything.
   migrate(_db);
   _db.exec(SCHEMA);
+  ensureFts(_db);
   return _db;
 }
 

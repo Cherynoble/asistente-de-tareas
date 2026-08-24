@@ -1,5 +1,6 @@
 import { config } from '../../config.js';
 import { db } from '../../db/index.js';
+import { joinAtt } from '../../attachments.js';
 import { getSelectedChats } from '../../settings.js';
 import { readMessagesSince, readRecentMessagesByCount, type IMessageRow } from './reader.js';
 
@@ -33,9 +34,9 @@ export function persistMessages(rows: IMessageRow[]): { read: number; inserted: 
         ts: r.ts,
         ingested_at: now,
         has_attachment: r.hasAttachment ? 1 : 0,
-        attachment_mimes: r.attachmentMimes.join('||'),
-        attachment_names: r.attachmentNames.join('||'),
-        attachment_paths: r.attachmentPaths.join('||'),
+        attachment_mimes: joinAtt(r.attachmentMimes),
+        attachment_names: joinAtt(r.attachmentNames),
+        attachment_paths: joinAtt(r.attachmentPaths),
       });
       inserted += info.changes;
     }

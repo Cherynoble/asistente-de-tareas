@@ -1,12 +1,12 @@
-import type Anthropic from '@anthropic-ai/sdk';
 import { db } from '../db/index.js';
-import { config } from '../config.js';
-import { anthropicClient } from '../settings.js';
+import { splitAtt } from '../attachments.js';
+import { aiProvider, type AiMsg, type AiTool } from '../ai/index.js';
 import { nameMap, resolveClientHint } from '../names.js';
 import { addMessage, threadMessages, listMemories, saveMemory } from './store.js';
 import { scheduleReminder } from '../notify/scheduled.js';
 import { describeAttachment } from '../extract/vision.js';
 import { normTitle } from '../extract/pipeline.js';
+import { bodyFilterSql } from '../messages/browse.js';
 import { downloadWaMedia } from '../ingest/whatsapp/client.js';
 
 export interface ChatMsg {
@@ -31,12 +31,12 @@ Tools you can use:
 
 IMPORTANT: The user is a native Spanish speaker. ALWAYS reply in Spanish (neutral Latin-American Spanish), regardless of the language of the messages or tasks in the context. Keep proper names, product names, and quoted message snippets in their original language.`;
 
-const TOOLS: Anthropic.Tool[] = [
+const TOOLS: AiTool[] = [
   {
     name: 'save_memory',
     description:
       'Guarda un dato duradero sobre el usuario, sus clientes, su negocio o sus preferencias para recordarlo en futuras conversaciones. Úsalo solo cuando el usuario comparta algo que valga la pena recordar a largo plazo — no para detalles efímeros ni preguntas puntuales.',
-    input_schema: {
+    schema: {
       type: 'object',
       properties: {
         fact: { type: 'string', description: 'El dato a recordar, en una sola frase concisa.' },
@@ -48,7 +48,7 @@ const TOOLS: Anthropic.Tool[] = [
     name: 'create_task',
     description:
       'Crea una tarea nueva directamente en la lista (queda en estado "por hacer"). Úsalo cuando el usuario pida explícitamente crear o agregar una tarea.',
-    input_schema: {
+    schema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Título corto de la tarea, en español.' },
@@ -62,7 +62,7 @@ const TOOLS: Anthropic.Tool[] = [
     name: 'schedule_reminder',
     description:
       'Programa un recordatorio único para una fecha/hora futura. Úsalo cuando el usuario pida que le recuerdes algo más tarde.',
-    input_schema: {
+    schema: {
       type: 'object',
       properties: {
         text: { type: 'string', description: 'Qué recordarle, en español.' },
@@ -78,7 +78,7 @@ const TOOLS: Anthropic.Tool[] = [
     name: 'search_messages',
     description:
       'Busca en TODO el historial de mensajes (miles), no solo en los recientes. Úsalo cuando la respuesta pueda estar más atrás en el tiempo. Devuelve los mensajes que coinciden con fecha, remitente y texto.',
-    input_schema: {
+    schema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Palabra(s) o frase a buscar en el texto de los mensajes.' },
@@ -92,7 +92,7 @@ const TOOLS: Anthropic.Tool[] = [
     name: 'find_attachments',
     description:
       'Busca archivos (imágenes, PDF, documentos) recibidos o enviados, por nombre de archivo, contacto, chat o texto cercano. Devuelve message_id e index de cada archivo para poder leerlo con read_attachment.',
-    input_schema: {
+    schema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Nombre de archivo, contacto, chat o palabra relacionada. Vacío = los más recientes.' },
@@ -105,7 +105,7 @@ const TOOLS: Anthropic.Tool[] = [
     name: 'read_attachment',
     description:
       'Abre y lee el contenido de un archivo concreto (imagen o PDF) por message_id (obtenido de find_attachments) y lo analiza: transcribe cifras de una cotización/factura, describe una foto de producto, etc.',
-    input_schema: {
+    schema: {
       type: 'object',
       properties: {
         message_id: { type: 'number', description: 'El id del mensaje que contiene el archivo (de find_attachments).' },
@@ -184,8 +184,10 @@ async function execTool(name: string, input: unknown, threadId: number): Promise
     if (!q) return 'Falta el texto a buscar.';
     const lim = Math.min(Math.max(Number(i.limit) || 20, 1), 40);
     const names = nameMap();
-    const params: unknown[] = [`%${q}%`];
-    let where = `body LIKE ?`;
+    // Same indexed substring filter as the Mensajes search (FTS when available).
+    const f = bodyFilterSql(q);
+    const params: unknown[] = [f.param];
+    let where = f.sql;
     const client = (i.client ?? '').trim();
     if (client) {
       const handle = resolveClientHint(client);
@@ -242,8 +244,8 @@ async function execTool(name: string, input: unknown, threadId: number): Promise
     if (!rows.length) return 'No se encontraron archivos.';
     const lines: string[] = [];
     for (const r of rows) {
-      const mimes = (r.attachment_mimes || '').split('||');
-      const fnames = (r.attachment_names || '').split('||');
+      const mimes = splitAtt(r.attachment_mimes);
+      const fnames = splitAtt(r.attachment_names);
       const who = r.direction === 'outgoing' ? 'Yo' : names[r.sender ?? ''] || r.sender_name || r.sender || '?';
       const when = new Date(r.ts).toLocaleString('es');
       for (let idx = 0; idx < Math.max(mimes.length, 1); idx++) {
@@ -271,8 +273,8 @@ async function execTool(name: string, input: unknown, threadId: number): Promise
       | { source: string; wa_account: string | null; source_msg_id: string; attachment_mimes: string; attachment_paths: string }
       | undefined;
     if (!row) return 'No se encontró ese mensaje.';
-    const mimes = (row.attachment_mimes || '').split('||');
-    const paths = (row.attachment_paths || '').split('||');
+    const mimes = splitAtt(row.attachment_mimes);
+    const paths = splitAtt(row.attachment_paths);
     let mime = mimes[idx] || mimes[0] || '';
     let filePath = (paths[idx] || '').trim();
     if (!filePath && row.source === 'whatsapp') {
@@ -295,18 +297,25 @@ async function execTool(name: string, input: unknown, threadId: number): Promise
     const title = (i.title ?? '').trim();
     if (!title) return 'Falta el título de la tarea.';
     // Same deterministic guard as the extraction pipeline: an open task with
-    // the same normalized title already exists → report it instead of creating
-    // a twin (the model retrying a tool call, or the owner asking twice, must
-    // not stack duplicates). The owner can still force one by wording the
-    // title differently — which also makes the two distinguishable in the UI.
+    // the same normalized title FOR THE SAME CLIENT already exists → report it
+    // instead of creating a twin (the model retrying a tool call, or the owner
+    // asking twice, must not stack duplicates). A different client's identical
+    // title is a different task; a missing hint on either side still matches
+    // conservatively — mirroring saveTasks() rule 1 in extract/pipeline.ts.
+    const hint = resolveClientHint(i.client ?? '');
     const twin = (
       db()
         .prepare(
-          `SELECT title, status FROM tasks
+          `SELECT title, status, client_hint AS clientHint FROM tasks
            WHERE status IN ('proposed','todo','waiting') AND archived_at IS NULL AND deleted_at IS NULL`,
         )
-        .all() as { title: string; status: string }[]
-    ).find((t) => normTitle(t.title) === normTitle(title));
+        .all() as { title: string; status: string; clientHint: string }[]
+    ).find((t) => {
+      if (normTitle(t.title) !== normTitle(title)) return false;
+      const ha = hint.trim().toLowerCase();
+      const hb = (t.clientHint || '').trim().toLowerCase();
+      return !ha || !hb || ha === hb;
+    });
     if (twin) return `Ya existe una tarea abierta con ese título: "${twin.title}" (${twin.status}). No se creó un duplicado.`;
     const now = Date.now();
     db()
@@ -314,7 +323,7 @@ async function execTool(name: string, input: unknown, threadId: number): Promise
         `INSERT INTO tasks (title, detail, status, client_hint, source_quote, created_at, updated_at)
          VALUES (?, ?, 'todo', ?, '', ?, ?)`,
       )
-      .run(title, (i.detail ?? '').trim(), resolveClientHint(i.client ?? ''), now, now);
+      .run(title, (i.detail ?? '').trim(), hint, now, now);
     return `Tarea creada: "${title}".`;
   }
   if (name === 'schedule_reminder') {
@@ -339,46 +348,38 @@ export async function runTurn(
 ): Promise<{ reply: string; usedTools: string[] }> {
   addMessage(threadId, 'user', userText, attachments);
 
-  // Drop any empty-content message (the API rejects empty text blocks, and one
+  // Drop any empty-content message (the APIs reject empty text blocks, and one
   // bad stored row would otherwise make every future turn in the thread fail).
-  const messages: Anthropic.MessageParam[] = threadMessages(threadId)
+  const messages: AiMsg[] = threadMessages(threadId)
     .filter((m) => m.content.trim() !== '')
     .map((m) => ({
       role: m.role,
       content: m.content,
     }));
-  const client = anthropicClient();
+  const provider = aiProvider();
+  const system = `${SYSTEM}\n\n--- CONTEXT (from the database) ---\n${buildContext()}`;
   const usedTools: string[] = [];
   let reply = '';
 
   for (let i = 0; i < 5; i++) {
-    const resp = await client.messages.create({
-      model: config.model,
-      max_tokens: 1024,
-      system: `${SYSTEM}\n\n--- CONTEXT (from the database) ---\n${buildContext()}`,
+    const resp = await provider.chat({
+      system,
+      maxTokens: 1024,
       tools: TOOLS,
       messages,
     });
-    const text = resp.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map((b) => b.text)
-      .join('');
-    if (text) reply = text;
+    if (resp.text) reply = resp.text;
 
-    if (resp.stop_reason === 'tool_use') {
-      const results: Anthropic.ToolResultBlockParam[] = [];
-      for (const block of resp.content) {
-        if (block.type === 'tool_use') {
-          usedTools.push(block.name);
-          results.push({
-            type: 'tool_result',
-            tool_use_id: block.id,
-            content: await execTool(block.name, block.input, threadId),
-          });
-        }
+    if (resp.stopReason === 'tool_use' && resp.toolCalls.length) {
+      messages.push({ role: 'assistant', content: resp.text, toolCalls: resp.toolCalls });
+      for (const call of resp.toolCalls) {
+        usedTools.push(call.name);
+        messages.push({
+          role: 'tool',
+          toolCallId: call.id,
+          content: await execTool(call.name, call.input, threadId),
+        });
       }
-      messages.push({ role: 'assistant', content: resp.content });
-      messages.push({ role: 'user', content: results });
       continue;
     }
     break;

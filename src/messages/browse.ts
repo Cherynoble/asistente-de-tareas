@@ -8,7 +8,7 @@
  * show what really got stored. The route marks each chat as included or not
  * instead.
  */
-import { db } from '../db/index.js';
+import { db, ftsAvailable } from '../db/index.js';
 
 export interface ChatSummary {
   chatId: string;
@@ -129,13 +129,35 @@ function likeTerm(q: string): string {
   return `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 }
 
+/**
+ * One WHERE fragment for "body contains <term>", shared by the Mensajes pager,
+ * the global search, and the chat agent's search_messages tool.
+ *
+ * Uses the messages_fts trigram index when available — same substring semantics
+ * as LIKE (incl. Chinese text), without the full-table scan. The trigram
+ * tokenizer needs at least 3 characters, so shorter terms (and installs whose
+ * SQLite lacks fts5) keep the LIKE path.
+ */
+export function bodyFilterSql(term: string): { sql: string; param: string } {
+  const t = term.trim();
+  if (ftsAvailable() && [...t].length >= 3) {
+    // fts5 string query: double any embedded double-quotes.
+    return {
+      sql: `id IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)`,
+      param: `"${t.replace(/"/g, '""')}"`,
+    };
+  }
+  return { sql: `body LIKE ? ESCAPE '\\'`, param: likeTerm(t) };
+}
+
 /** Extra WHERE clauses + params shared by every direction of the pager. */
 function filterSql(o: PageOpts): { sql: string; params: unknown[] } {
   let sql = '';
   const params: unknown[] = [];
   if (o.q && o.q.trim()) {
-    sql += ` AND body LIKE ? ESCAPE '\\'`;
-    params.push(likeTerm(o.q.trim()));
+    const f = bodyFilterSql(o.q);
+    sql += ` AND ${f.sql}`;
+    params.push(f.param);
   }
   if (o.onlyUnprocessed) sql += ` AND processed = 0`;
   if (o.onlyAttachments) sql += ` AND has_attachment = 1`;
@@ -170,12 +192,17 @@ export function pageMessages(o: PageOpts): Page {
     d
       .prepare(`${base} AND (ts > ? OR (ts = ? AND id > ?)) ORDER BY ts ASC, id ASC LIMIT ?`)
       .all(o.chatId, ...fp, ts, ts, id, n + 1) as BrowseRow[];
-  /** At-or-after the cursor instant — the "after" half of a jump-to-date, where
-   *  the target instant itself must be included so the jump lands ON that day. */
-  const runFrom = (ts: number, n: number): BrowseRow[] =>
+  /** At-or-after the cursor — the "after" half of an 'around' page, where the
+   *  anchor itself must be included (a date jump lands ON that day; a search
+   *  hit lands ON that message). Composite (ts, id) like the other runners:
+   *  with a ts-only anchor (cursorId 0) this reduces to `ts >= ?`, but with a
+   *  message anchor the id keeps the two halves a true partition — bulk imports
+   *  share timestamps, and a ts-only "after" half re-included rows the "before"
+   *  half already showed. */
+  const runFrom = (ts: number, id: number, n: number): BrowseRow[] =>
     d
-      .prepare(`${base} AND ts >= ? ORDER BY ts ASC, id ASC LIMIT ?`)
-      .all(o.chatId, ...fp, ts, n + 1) as BrowseRow[];
+      .prepare(`${base} AND (ts > ? OR (ts = ? AND id >= ?)) ORDER BY ts ASC, id ASC LIMIT ?`)
+      .all(o.chatId, ...fp, ts, ts, id, n + 1) as BrowseRow[];
 
   const dir = o.dir ?? 'older';
   const hasCursor = Number.isFinite(o.cursorTs);
@@ -201,7 +228,7 @@ export function pageMessages(o: PageOpts): Page {
     // Strictly-before and at-or-after partition the timeline at the anchor: no
     // gap, no duplicate row across the two halves.
     const before = runOlder(cts, cid, half);
-    const after = runFrom(cts, limit - half);
+    const after = runFrom(cts, cid, limit - half);
     return {
       messages: [...before.slice(0, half).reverse(), ...after.slice(0, limit - half)],
       hasOlder: before.length > half,
@@ -221,13 +248,14 @@ export interface SearchHit extends BrowseRow {
 export function searchAllMessages(q: string, limit = 40): SearchHit[] {
   const term = q.trim();
   if (!term) return [];
+  const f = bodyFilterSql(term);
   return db()
     .prepare(
       `SELECT ${ROW_COLS} FROM messages
-       WHERE chat_id IS NOT NULL AND chat_id <> '' AND body LIKE ? ESCAPE '\\'
+       WHERE chat_id IS NOT NULL AND chat_id <> '' AND ${f.sql}
        ORDER BY ts DESC LIMIT ?`,
     )
-    .all(likeTerm(term), Math.min(Math.max(limit, 1), 100)) as SearchHit[];
+    .all(f.param, Math.min(Math.max(limit, 1), 100)) as SearchHit[];
 }
 
 /** Totals for the header strip of an open conversation. */

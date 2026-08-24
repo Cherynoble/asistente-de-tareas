@@ -1,7 +1,6 @@
 import { db } from '../db/index.js';
-import { config } from '../config.js';
-import { anthropicClient } from '../settings.js';
-import { nameMap } from '../names.js';
+import { aiProvider, extractJson } from '../ai/index.js';
+import { nameMap, invalidateNameCache } from '../names.js';
 
 interface Cand {
   handle: string;
@@ -44,7 +43,7 @@ export async function autoClassifyClients(limit = 200): Promise<{ classified: nu
     return { handle: r.handle, name: names[r.handle] || c?.name || '', productNeed: c?.pn || '', samples };
   });
 
-  const client = anthropicClient();
+  const provider = aiProvider();
   const upsert = d.prepare(
     `INSERT INTO clients (handle, name, category, created_at, updated_at)
      VALUES (@handle, @name, @cat, @now, @now)
@@ -71,16 +70,12 @@ export async function autoClassifyClients(limit = 200): Promise<{ classified: nu
       `Devuelve SOLO un arreglo JSON, sin texto extra: [{"i":1,"cat":"Oficina"},{"i":2,"cat":"Personal"}].\n\n` +
       `Contactos:\n${list}`;
     try {
-      const resp = await client.messages.create({
-        model: config.model,
-        max_tokens: 600,
+      const resp = await provider.chat({
+        maxTokens: 600,
         messages: [{ role: 'user', content: prompt }],
       });
-      const text = resp.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
-      const a = text.indexOf('[');
-      const z = text.lastIndexOf(']');
-      if (a < 0 || z < 0) continue;
-      const parsed = JSON.parse(text.slice(a, z + 1)) as { i: number; cat: string }[];
+      const parsed = extractJson<{ i: number; cat: string }[]>(resp.text);
+      if (!Array.isArray(parsed)) continue;
       const now = Date.now();
       for (const item of parsed) {
         const cand = batch[Number(item.i) - 1];
@@ -94,5 +89,6 @@ export async function autoClassifyClients(limit = 200): Promise<{ classified: nu
       /* skip this batch — leaves them unclassified for a retry */
     }
   }
+  if (classified) invalidateNameCache(); // upserts may have created client rows
   return { classified, scanned: cands.length };
 }

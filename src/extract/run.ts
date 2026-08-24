@@ -1,4 +1,4 @@
-import { config } from '../config.js';
+import { aiName, hasAiKey } from '../ai/index.js';
 import { runExtraction } from './pipeline.js';
 
 // CLI: run extraction over recent messages and print what it does.
@@ -7,12 +7,12 @@ import { runExtraction } from './pipeline.js';
 const limit = Number(process.env.EXTRACT_LIMIT ?? 80);
 const vision = process.env.EXTRACT_VISION === '1';
 
-if (!config.anthropicApiKey) {
-  console.error('\n✗ No ANTHROPIC_API_KEY set. Add it to .env (see .env.example), then re-run.\n');
+if (!hasAiKey()) {
+  console.error('\n✗ No AI provider configured. Set ANTHROPIC_API_KEY in .env or configure one in Ajustes.\n');
   process.exit(1);
 }
 
-console.log(`Extracting from the ${limit} most recent messages${vision ? ' (with vision)' : ''}…\n`);
+console.log(`Extracting (${aiName()}) from the ${limit} most recent messages${vision ? ' (with vision)' : ''}…\n`);
 
 await runExtraction({
   limit,

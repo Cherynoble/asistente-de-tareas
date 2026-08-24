@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import Anthropic from '@anthropic-ai/sdk';
 import { db } from './db/index.js';
 import { config } from './config.js';
 
@@ -22,14 +21,11 @@ export function setSetting(key: string, value: string): void {
     .run(key, value);
 }
 
-/** Effective Anthropic key: in-app setting wins, else the .env value. */
+/** Effective ANTHROPIC key: in-app setting wins, else the .env value. (For
+ *  "is the active AI provider usable", use hasAiKey() in src/ai — the provider
+ *  may not be Anthropic at all.) */
 export function getApiKey(): string {
   return (getSetting('anthropic_api_key') || config.anthropicApiKey || '').trim();
-}
-
-/** A fresh Anthropic client using the current key (so in-app key changes apply). */
-export function anthropicClient(): Anthropic {
-  return new Anthropic({ apiKey: getApiKey() });
 }
 
 function parseChatList(key: string): string[] {

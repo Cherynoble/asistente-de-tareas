@@ -1,6 +1,19 @@
 import { db } from './db/index.js';
 import { resolveContactName } from './ingest/contacts.js';
 
+// nameMap() scans and GROUPs the whole messages table, yet is called on nearly
+// every request (message pages, senders, attachments, chat context) and inside
+// resolveClientHint() per task insert — O(all messages) each time. Cache it
+// briefly; writers that change names (Clientes edits, ingest) call
+// invalidateNameCache() so edits still show up immediately.
+const NAME_CACHE_MS = 30_000;
+let nameCache: { map: Record<string, string>; at: number } | null = null;
+
+/** Drop the cached name map (call after any write that can change a name). */
+export function invalidateNameCache(): void {
+  nameCache = null;
+}
+
 /**
  * Build a handle -> display-name map used everywhere the UI shows a sender.
  * Precedence, highest first:
@@ -11,6 +24,7 @@ import { resolveContactName } from './ingest/contacts.js';
  * phone/email (prettified) and can prompt the owner to name them.
  */
 export function nameMap(): Record<string, string> {
+  if (nameCache && Date.now() - nameCache.at < NAME_CACHE_MS) return nameCache.map;
   const d = db();
   const handles = d
     .prepare(`SELECT DISTINCT sender FROM messages WHERE sender IS NOT NULL AND sender != 'me'`)
@@ -45,6 +59,7 @@ export function nameMap(): Record<string, string> {
   }
   // Manual entries whose handle no longer appears in messages still count.
   for (const [h, n] of Object.entries(manual)) if (!out[h]) out[h] = n;
+  nameCache = { map: out, at: Date.now() };
   return out;
 }
 
