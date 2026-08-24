@@ -49,7 +49,7 @@ We moved past "feature-complete" into adding features, with proper infra:
   only the *first* attachment per message, and the nightly cron's vision cap of 20 covered up
   to 6,000 messages — undescribed files were lost for good, since the row is marked processed
   regardless.
-- **Current version 1.7.0** (shell still 0.1.x; all updates ship online via GitHub Releases,
+- **Current version 1.8.0** (shell still 0.1.x; all updates ship online via GitHub Releases,
   minShellVersion 0.1.0 since no new deps). Bump version + `MIN_SHELL_VERSION=0.1.0 npm run
   release -- "notas"` to publish; Dad clicks "Buscar actualizaciones".
 - **Multi-provider AI layer (2026-08-24, unreleased/experimental)** — `src/ai/` is now the
