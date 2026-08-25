@@ -316,7 +316,6 @@ async function execTool(name: string, input: unknown, threadId: number): Promise
     return describeAttachment(filePath, visionMime(mime, filePath), {
       prompt: readPrompt(),
       maxTokens: 700,
-      role: 'chat',
     });
   }
   if (name === 'save_memory') {

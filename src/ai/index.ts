@@ -7,6 +7,7 @@
  *   ai_provider           — preset id (see defaultProviderId(); qwen/kimi/…)
  *   ai_model:<provider>   — model override, per provider (switching back keeps it)
  *   ai_model_bulk:<prov>  — cheaper model for bulk work (see AiRole)
+ *   ai_model_vision:<prov>— model used for image input (see AiRole)
  *   ai_base_url:<provider>— base URL override (mainly for 'custom' / mirrors)
  *   ai_key:<provider>     — API key, per provider (anthropic reuses the legacy
  *                           anthropic_api_key so existing installs keep working)
@@ -30,10 +31,15 @@ export * from './types.js';
  *            messages. High volume, low complexity, cost-sensitive.
  *   'chat' — the interactive tool-using agent. Low volume, needs the stronger
  *            model's tool discipline.
+ *   'vision' — anything with an image attached. This is NOT the same choice as
+ *            either of the other two: on most providers the strongest text
+ *            model cannot see images at all (qwen-max and qwen-plus are both
+ *            text-only), so sending a product photo to the chat or bulk model
+ *            would simply fail.
  * Providers that publish a cheap tier get it via preset.defaultBulkModel; where
- * they don't, both roles resolve to the same model and nothing changes.
+ * they don't, the roles resolve to the same model and nothing changes.
  */
-export type AiRole = 'chat' | 'bulk';
+export type AiRole = 'chat' | 'bulk' | 'vision';
 
 export interface AiConfig {
   provider: string;
@@ -79,7 +85,9 @@ export function aiConfig(role: AiRole = 'chat'): AiConfig {
   const model =
     role === 'bulk'
       ? (getSetting(`ai_model_bulk:${preset.id}`) || '').trim() || preset.defaultBulkModel || general
-      : general;
+      : role === 'vision'
+        ? (getSetting(`ai_model_vision:${preset.id}`) || '').trim() || preset.defaultVisionModel || general
+        : general;
   const baseUrl = (getSetting(`ai_base_url:${preset.id}`) || '').trim() || preset.baseUrl;
   const visionRaw = getSetting(`ai_vision:${preset.id}`);
   return {
@@ -101,6 +109,7 @@ export function saveAiSettings(b: {
   provider?: string;
   model?: string;
   bulkModel?: string;
+  visionModel?: string;
   baseUrl?: string;
   apiKey?: string;
   vision?: boolean;
@@ -111,6 +120,7 @@ export function saveAiSettings(b: {
   if (typeof b.provider === 'string') setSetting('ai_provider', providerId);
   if (typeof b.model === 'string') setSetting(`ai_model:${providerId}`, b.model.trim());
   if (typeof b.bulkModel === 'string') setSetting(`ai_model_bulk:${providerId}`, b.bulkModel.trim());
+  if (typeof b.visionModel === 'string') setSetting(`ai_model_vision:${providerId}`, b.visionModel.trim());
   if (typeof b.baseUrl === 'string') setSetting(`ai_base_url:${providerId}`, b.baseUrl.trim());
   if (typeof b.apiKey === 'string') {
     if (providerId === 'anthropic') setSetting('anthropic_api_key', b.apiKey.trim());
@@ -166,6 +176,7 @@ export interface AiProviderStatus {
   baseUrlAlt: string;
   model: string;
   bulkModel: string;
+  visionModel: string;
   vision: boolean;
   needsKey: boolean;
   keyHint: string;
@@ -175,7 +186,7 @@ export interface AiProviderStatus {
 /** Everything the Ajustes UI needs — per-provider stored values and which one
  *  is active. Never returns a key, only whether one is saved. */
 export function aiStatus(): {
-  active: { provider: string; name: string; bulkName: string; configured: boolean };
+  active: { provider: string; name: string; bulkName: string; visionName: string; configured: boolean };
   providers: AiProviderStatus[];
 } {
   const active = aiConfig();
@@ -184,6 +195,7 @@ export function aiStatus(): {
       provider: active.provider,
       name: aiName(),
       bulkName: aiName('bulk'),
+      visionName: aiName('vision'),
       configured: hasAiKey(),
     },
     providers: PROVIDER_PRESETS.map((p) => {
@@ -198,6 +210,7 @@ export function aiStatus(): {
           p.defaultModel ||
           (p.id === 'anthropic' ? config.model : ''),
         bulkModel: (getSetting(`ai_model_bulk:${p.id}`) || '').trim() || p.defaultBulkModel || '',
+        visionModel: (getSetting(`ai_model_vision:${p.id}`) || '').trim() || p.defaultVisionModel || '',
         vision: visionRaw === null ? p.vision : visionRaw === '1',
         needsKey: p.needsKey,
         keyHint: p.keyHint ?? '',

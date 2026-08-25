@@ -25,6 +25,8 @@ const { runTurn } = await import('../src/chat/index.js');
 const { createThread, threadMessages, listMemories } = await import('../src/chat/store.js');
 const { OpenAiCompatProvider } = await import('../src/ai/openai.js');
 const { setLocale, getLocale } = await import('../src/i18n.js');
+const { ModelExtractor } = await import('../src/extract/extractor.js');
+const { saveAiSettings } = await import('../src/ai/index.js');
 type AiReq = import('../src/ai/types.js').AiRequest;
 type AiResp = import('../src/ai/types.js').AiResponse;
 
@@ -265,4 +267,66 @@ test('the system prompt tells the model to search rather than claim it cannot se
   // 150-message window instead of calling the retrieval tool.
   assert.match(system, /CALL search_messages/);
   assert.match(system, /Do NOT conclude that something never happened/);
+});
+
+// ---- 4. NEW tasks are generated in the selected language ----
+// The owner's question: "if the language is Chinese, will tasks be generated in
+// Chinese?" They will — but only because the extractor prompt is rebuilt from
+// the setting on every run. This test is what stops that regressing silently,
+// since a wrong answer here is invisible until tasks show up in the wrong
+// language days later.
+
+test('the extractor is told to write task titles in the selected language', async () => {
+  const m = await mockOai([{ choices: [{ finish_reason: 'stop', message: { content: '{"tasks":[]}' } }] }]);
+  try {
+    saveAiSettings({ provider: 'custom', baseUrl: m.url, model: 'mock', apiKey: 'k' });
+    const msgs = [
+      { id: 1, body: '需要报价单', direction: 'incoming', sender: 'x', chatName: 'Wong', ts: 0 },
+    ] as never;
+
+    const expected: Record<string, RegExp> = {
+      es: /Write your output in Spanish \(neutral Latin-American Spanish\)/,
+      en: /Write your output in English/,
+      zh: /Write your output in Simplified Chinese/,
+    };
+
+    let i = 0;
+    for (const [locale, re] of Object.entries(expected)) {
+      setLocale(locale as 'es' | 'en' | 'zh');
+      await new ModelExtractor().proposeTasks(msgs);
+      const system = String(m.captured[i]!.messages[0]!.content);
+      assert.match(system, re, `locale ${locale}: extractor must name the output language`);
+      // source_quote must NEVER follow the UI language — it is a literal search
+      // string pasted into WhatsApp, so it stays in the message's own language.
+      assert.match(system, /ORIGINAL LANGUAGE/, `locale ${locale}: source_quote rule lost`);
+      i++;
+    }
+    assert.equal(m.captured.length, 3);
+  } finally {
+    m.close();
+    setLocale('es');
+  }
+});
+
+test('switching language does NOT rewrite tasks already stored', async () => {
+  // Deliberate product decision: re-translating the same column is lossy and a
+  // UI preference must not silently rewrite his data. `translate:tasks` is the
+  // explicit opt-in. This test pins that behaviour.
+  const now = Date.now();
+  db()
+    .prepare(
+      `INSERT INTO tasks (title, detail, status, client_hint, source_quote, created_at, updated_at)
+       VALUES ('Cotizar toallas de papel', 'Pedido de Wong', 'todo', 'Wong', 'necesito cotización', ?, ?)`,
+    )
+    .run(now, now);
+  const before = (db().prepare(`SELECT title FROM tasks ORDER BY id DESC LIMIT 1`).get() as { title: string }).title;
+
+  setLocale('zh');
+  const afterZh = (db().prepare(`SELECT title FROM tasks ORDER BY id DESC LIMIT 1`).get() as { title: string }).title;
+  setLocale('en');
+  const afterEn = (db().prepare(`SELECT title FROM tasks ORDER BY id DESC LIMIT 1`).get() as { title: string }).title;
+  setLocale('es');
+
+  assert.equal(afterZh, before, 'existing task titles must survive a language switch untouched');
+  assert.equal(afterEn, before);
 });

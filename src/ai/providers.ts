@@ -29,6 +29,15 @@ export interface ProviderPreset {
    * Empty = use defaultModel for both.
    */
   defaultBulkModel?: string;
+  /**
+   * Model used for IMAGE input. Separate from the other two because the
+   * strongest text model is usually NOT the vision one — on Qwen, qwen-max and
+   * qwen-plus are both text-only, so without this every product photo would be
+   * sent to a model that cannot see it. Empty = use defaultModel.
+   * As with every field here, these are prefills: confirm the current name in
+   * the provider's console, they change every few months.
+   */
+  defaultVisionModel?: string;
   /** Whether the default model accepts image input (user-overridable). */
   vision: boolean;
   /** Whether an API key is required ('' allowed for local servers). */
@@ -58,6 +67,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrlAlt: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
     defaultModel: 'qwen-max',
     defaultBulkModel: 'qwen-plus',
+    defaultVisionModel: 'qwen-vl-max',
     vision: true,
     needsKey: true,
     keyHint: 'dashscope.console.aliyun.com',
@@ -69,6 +79,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.moonshot.cn/v1',
     baseUrlAlt: 'https://api.moonshot.ai/v1',
     defaultModel: 'kimi-k2-0711-preview',
+    // Moonshot's vision models are a separate family from the K-series text
+    // models; confirm the current id in the console before relying on images.
+    defaultVisionModel: 'moonshot-v1-8k-vision-preview',
     vision: true,
     needsKey: true,
     keyHint: 'platform.moonshot.cn',
@@ -90,7 +103,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     kind: 'openai',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     defaultModel: 'glm-4.6',
-    // GLM-4V is the vision-capable sibling; set it as the model if you need images.
+    // GLM-4V is the vision-capable sibling — set it as the vision model in
+    // Ajustes if images matter; glm-4.6 alone cannot read them.
     vision: false,
     needsKey: true,
     keyHint: 'open.bigmodel.cn',

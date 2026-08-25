@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { extractJson, withRetry, AiHttpError } from '../src/ai/types.js';
 import { clampItem, clampBlockKeepingEnd, MAX_ITEM_CHARS } from '../src/ai/budget.js';
@@ -280,4 +283,44 @@ test('clampBlockKeepingEnd keeps the most recent lines, not the oldest', () => {
 test('clampBlockKeepingEnd leaves a block under budget alone', () => {
   const small = 'a\nb\nc';
   assert.equal(clampBlockKeepingEnd(small, 1_000), small);
+});
+
+// ---- model roles: chat / bulk / vision resolve independently ----
+// The bug this guards: on Qwen the strongest text models (qwen-max, qwen-plus)
+// cannot see images at all, so if vision inherited the chat or bulk model every
+// product photo would silently fail — and product-photo-to-task is a core
+// feature of the app.
+
+test('the vision role resolves to a vision-capable model, not the chat one', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dadsapp-role-'));
+  process.env.DATA_DIR = dir;
+  const { aiConfig, saveAiSettings } = await import('../src/ai/index.js');
+
+  saveAiSettings({ provider: 'qwen', apiKey: 'k' });
+  const chat = aiConfig('chat');
+  const bulk = aiConfig('bulk');
+  const vision = aiConfig('vision');
+
+  assert.equal(chat.model, 'qwen-max');
+  assert.equal(bulk.model, 'qwen-plus', 'bulk must use the cheap tier');
+  assert.equal(vision.model, 'qwen-vl-max', 'vision must NOT inherit a text-only model');
+  assert.notEqual(vision.model, chat.model);
+  assert.notEqual(vision.model, bulk.model);
+});
+
+test('an explicit per-role model override wins over the preset', async () => {
+  const { aiConfig, saveAiSettings } = await import('../src/ai/index.js');
+  saveAiSettings({ provider: 'qwen', visionModel: 'qwen-vl-plus', bulkModel: 'qwen-turbo' });
+  assert.equal(aiConfig('vision').model, 'qwen-vl-plus');
+  assert.equal(aiConfig('bulk').model, 'qwen-turbo');
+  assert.equal(aiConfig('chat').model, 'qwen-max', 'the chat model is unaffected');
+});
+
+test('a provider with no per-role defaults uses one model for all three', async () => {
+  const { aiConfig, saveAiSettings } = await import('../src/ai/index.js');
+  saveAiSettings({ provider: 'deepseek', apiKey: 'k' });
+  const m = aiConfig('chat').model;
+  assert.equal(aiConfig('bulk').model, m);
+  assert.equal(aiConfig('vision').model, m, 'no vision model configured → falls back, and vision:false gates it');
+  assert.equal(aiConfig('vision').vision, false, 'DeepSeek has no vision — images must degrade, not be sent blind');
 });

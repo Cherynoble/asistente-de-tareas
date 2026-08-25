@@ -155,6 +155,8 @@ function fillAiFields(providerId) {
   if (!aiStatusCache) return;
   const p = aiStatusCache.providers.find((x) => x.id === providerId) || aiStatusCache.providers[0];
   $('#ai-model').value = p.model || '';
+  $('#ai-model-bulk').value = p.bulkModel || '';
+  $('#ai-model-vision').value = p.visionModel || '';
   $('#ai-baseurl').value = p.baseUrl || '';
   $('#ai-baseurl-row').style.display = p.id === 'anthropic' ? 'none' : '';
   $('#ai-vision').checked = !!p.vision;
@@ -193,6 +195,8 @@ $('#save-key').addEventListener('click', async () => {
   const body = {
     provider: $('#ai-provider').value,
     model: $('#ai-model').value.trim(),
+    bulkModel: $('#ai-model-bulk').value.trim(),
+    visionModel: $('#ai-model-vision').value.trim(),
     baseUrl: $('#ai-baseurl').value.trim(),
     vision: $('#ai-vision').checked,
   };

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { aiProvider, type AiPart, type AiRole } from '../ai/index.js';
+import { aiProvider, type AiPart } from '../ai/index.js';
 import { replyLanguageInstruction } from '../i18n.js';
 
 /** Image media types the APIs accept directly. */
@@ -87,15 +87,15 @@ function loadImage(filePath: string, mime: string): { data: string; mediaType: s
 export async function describeAttachment(
   filePath: string,
   mime: string,
-  opts: { prompt?: string; maxTokens?: number; role?: AiRole } = {},
+  opts: { prompt?: string; maxTokens?: number } = {},
 ): Promise<string> {
   const prompt = opts.prompt ?? defaultPrompt();
   const maxTokens = opts.maxTokens ?? 300;
   try {
-    // Bulk by default (the nightly pass describes hundreds of attachments); the
-    // chat agent's "read this file" passes 'chat' because the owner is waiting
-    // on that answer and it needs the stronger model.
-    const provider = aiProvider(opts.role ?? 'bulk');
+    // Always the 'vision' role. The chat and bulk models are chosen for tool
+    // discipline and for cost, and on most providers neither one can see an
+    // image at all — so this must not inherit either of them.
+    const provider = aiProvider('vision');
     let part: AiPart;
 
     if (mime === 'application/pdf') {
