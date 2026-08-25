@@ -26,6 +26,7 @@ import { chatRouter } from './routes/chat.js';
 import { whatsappRouter } from './routes/whatsapp.js';
 import { messagesRouter } from './routes/messages.js';
 import { settingsRouter } from './routes/settings.js';
+import { i18nRouter } from './routes/i18n.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
@@ -86,6 +87,7 @@ app.use(chatRouter);
 app.use(whatsappRouter);
 app.use(messagesRouter);
 app.use(settingsRouter);
+app.use(i18nRouter);
 
 /**
  * Last-resort error handler for /api. Must be registered AFTER every route, and

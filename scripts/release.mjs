@@ -8,6 +8,7 @@
 // Set MIN_SHELL_VERSION only when the update needs a freshly delivered .app
 // (e.g. a new/native npm dependency); then also hand over a rebuilt app.
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,13 +37,24 @@ console.log(`• Staging in ${bundleDir}`);
 fs.cpSync(path.join(ROOT, 'dist'), path.join(bundleDir, 'dist'), { recursive: true });
 fs.cpSync(path.join(ROOT, 'public'), path.join(bundleDir, 'public'), { recursive: true });
 fs.copyFileSync(path.join(ROOT, 'package.json'), path.join(bundleDir, 'package.json'));
+// The manifest INSIDE the zip can't carry the zip's own hash, so it stays
+// hash-free; applyUpdate only reads `version` from it. The manifest published as
+// a RELEASE ASSET (written below, after zipping) is the one the updater trusts,
+// and that one carries sha256.
 const manifest = { version, minShellVersion, notes, at: Date.now() };
-const manifestPath = path.join(bundleDir, 'manifest.json');
-fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+fs.writeFileSync(path.join(bundleDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
 // 3. Zip bundle/ contents at the archive root (no --keepParent).
 const zipPath = path.join(stage, 'app-bundle.zip');
 run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', bundleDir, zipPath]);
+
+// 3b. Publish the zip's SHA-256 in the asset manifest. The installed updater
+//     refuses any release without it, so this is required, not optional — it is
+//     what lets a download over a hostile/slow link be trusted (or rejected).
+const sha256 = crypto.createHash('sha256').update(fs.readFileSync(zipPath)).digest('hex');
+const manifestPath = path.join(stage, 'manifest.json');
+fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, sha256 }, null, 2));
+console.log(`• sha256 ${sha256}`);
 
 // 4. Create the GitHub Release with the zip + manifest as assets.
 console.log(`• Creating release ${tag}…`);

@@ -1,0 +1,52 @@
+<h2>1. De dónde salen los mensajes</h2>
+          <p>La app junta dos fuentes en una sola base de datos:</p>
+          <ul>
+            <li><b>iMessage</b> — se lee directamente del Mac (solo lectura). Los mensajes <b>no</b> entran solos: hay que traerlos con <b>Importar historial</b> (o el proceso diario automático).</li>
+            <li><b>WhatsApp</b> — un espejo de WhatsApp Web (solo lectura, nunca envía). Mientras la app está abierta y conectada, los mensajes nuevos se <b>capturan automáticamente</b>. Los viejos se traen con Importar historial.</li>
+          </ul>
+          <p>En <b>Ajustes</b> eliges qué conversaciones se incluyen de cada fuente. Si no eliges ninguna, se incluyen todas.</p>
+
+          <h2>2. “Importar historial” — llenar la base de datos</h2>
+          <p>Trae mensajes <b>antiguos</b> a la app. El número que escribes significa:</p>
+          <ul>
+            <li><b>WhatsApp:</b> cuántos mensajes por <b>cada</b> conversación incluida (p. ej. 200 → los últimos 200 de cada chat).</li>
+            <li><b>iMessage:</b> cuántos mensajes en <b>total</b>, los más recientes primero.</li>
+          </ul>
+          <p>Importar <b>solo guarda</b> los mensajes; todavía no propone tareas. Es normal que después de importar no aparezca nada nuevo en Bandeja hasta que proceses. Volver a importar no duplica: los mensajes ya guardados se ignoran.</p>
+
+          <h2>3. “Procesar mensajes nuevos” — analizar y proponer tareas</h2>
+          <p>Toma los mensajes que aún <b>no se han analizado</b> y los pasa por la IA. De ahí salen las <b>tareas propuestas</b> en la pestaña <b>Bandeja</b>. Además:</p>
+          <ul>
+            <li>Cada imagen o PDF se “lee” con visión (para detectar cotizaciones, fotos de producto, etc.).</li>
+            <li>Un mensaje se marca como <b>analizado</b> una sola vez, así que la próxima vez no se vuelve a gastar en él.</li>
+            <li>Se analiza <b>del más nuevo al más viejo</b>: los mensajes de hoy entran en la primera pasada, aunque acabes de importar miles de mensajes antiguos.</li>
+            <li>Cada pasada analiza una cantidad limitada. Si queda historial antiguo pendiente, el estado lo indica (“quedan N mensajes antiguos en cola”). Pulsa <b>Procesar</b> otra vez cuando quieras, o deja que el proceso diario automático lo vaya vaciando.</li>
+          </ul>
+
+          <h2>4. “Envié un mensaje y no aparece”</h2>
+          <p>Casi siempre es una de estas tres cosas:</p>
+          <ol>
+            <li><b>iMessage no se captura solo.</b> Primero <b>Importar historial</b>, luego <b>Procesar</b>.</li>
+            <li><b>Esa conversación no está incluida.</b> Revisa la selección de chats en Ajustes.</li>
+            <li><b>Todavía no lo has procesado.</b> Guardar un mensaje y analizarlo son dos pasos. Pulsa <b>Procesar mensajes nuevos</b>: al empezar por los más recientes, lo que acabas de enviar o recibir entra en esa misma pasada.</li>
+          </ol>
+
+          <h2>5. La pestaña “Mensajes”</h2>
+          <p>Muestra tus conversaciones tal como quedaron guardadas en la app, con el mismo aspecto que WhatsApp o iMessage. Sirve para comprobar de un vistazo <b>qué se importó de verdad</b> de cada chat y qué falta.</p>
+          <ul>
+            <li>A la izquierda están todas las conversaciones con su número de mensajes, cuántos quedan <b>sin procesar</b> y cuántos tienen archivos. Aparecen <b>todas</b>, incluso las que no están incluidas en Ajustes: esas llevan la marca “no se importa”.</li>
+            <li>El buscador de la izquierda encuentra tanto conversaciones como texto dentro de los mensajes. Al pulsar un resultado te lleva a ese mensaje exacto.</li>
+            <li>Dentro de una conversación puedes buscar texto, filtrar por <b>sin procesar</b> o <b>con adjuntos</b>, y saltar a una fecha concreta con el calendario.</li>
+          </ul>
+          <p>Puedes <b>seleccionar mensajes</b> (marca la casilla; con Mayúsculas seleccionas un rango, y pulsando la fecha seleccionas el día entero, hasta 200) y luego:</p>
+          <ul>
+            <li><b>Analizar</b> — los vuelve a pasar por la IA y las tareas que salgan aparecen en <b>Bandeja</b>. Es seguro repetirlo: no cambia si el mensaje estaba analizado o no. Si no propone nada, casi siempre es porque ya tienes una tarea abierta que lo cubre, y te la muestra.</li>
+            <li><b>Enviar al Chat</b> — abre una conversación nueva con el asistente llevándose esos mensajes, para que le preguntes sobre ellos o le pidas crear una tarea.</li>
+          </ul>
+
+          <h2>6. Rutina recomendada</h2>
+          <ul>
+            <li><b>Día a día:</b> deja la app abierta. WhatsApp se captura solo; pulsa <b>Procesar mensajes nuevos</b> cuando quieras revisar tareas nuevas.</li>
+            <li><b>Puesta al día grande:</b> <b>Importar historial</b> con un número alto y luego <b>Procesar</b>. Lo reciente sale enseguida; para el historial antiguo, vuelve a pulsar Procesar de vez en cuando (o deja que el proceso diario lo vacíe solo).</li>
+            <li><b>Ver tareas:</b> revisa <b>Bandeja</b> (propuestas), apruébalas a <b>Tareas</b>, y usa el enlace <b>ver archivo</b> de una tarea para saltar al archivo que la originó en <b>Adjuntos</b>.</li>
+          </ul>

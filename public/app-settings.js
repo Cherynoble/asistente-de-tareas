@@ -25,19 +25,21 @@ async function loadDiagnostics() {
     const d = await (await fetch('/api/diagnostics')).json();
     const src = d.sources.length
       ? d.sources
-          .map((s) => `${s.source}: ${s.count} (último ${s.lastAt ? fmtMsgTime(s.lastAt) : '—'})`)
+          .map((s) => `${s.source}: ${s.count} (${tr('diag.last')} ${s.lastAt ? fmtMsgTime(s.lastAt) : '—'})`)
           .join(' · ')
-      : 'sin mensajes';
+      : tr('diag.noMessages');
     const unproc = d.unprocessed.count
-      ? `${d.unprocessed.count} sin procesar (el más antiguo: ${fmtMsgTime(d.unprocessed.oldestAt)})`
-      : 'todo procesado';
+      ? tr('diag.nUnprocessed', { n: d.unprocessed.count, oldest: fmtMsgTime(d.unprocessed.oldestAt) })
+      : tr('diag.allProcessed');
     box.innerHTML =
-      `<div><b>Base de datos:</b> ${esc(d.dbPath)}</div>` +
-      `<div><b>Mensajes:</b> ${esc(src)}</div>` +
-      `<div><b>Cola de proceso:</b> ${esc(unproc)}</div>`;
-    lastDiagText = `dataDir: ${d.dataDir}\ndbPath: ${d.dbPath}\nmensajes: ${src}\ncola: ${unproc}`;
+      `<div><b>${esc(tr('diag.database'))}</b> ${esc(d.dbPath)}</div>` +
+      `<div><b>${esc(tr('diag.messages'))}</b> ${esc(src)}</div>` +
+      `<div><b>${esc(tr('diag.queue'))}</b> ${esc(unproc)}</div>`;
+    // Deliberately untranslated: this is a diagnostic blob meant to be pasted
+    // back to whoever is debugging, so it stays stable across languages.
+    lastDiagText = `dataDir: ${d.dataDir}\ndbPath: ${d.dbPath}\nmessages: ${src}\nqueue: ${unproc}`;
   } catch {
-    box.textContent = 'No se pudo cargar el diagnóstico.';
+    box.textContent = tr('diag.loadFailed');
     lastDiagText = '';
   }
 }
@@ -46,10 +48,10 @@ $('#diag-copy').addEventListener('click', async () => {
   if (!lastDiagText) return;
   try {
     await navigator.clipboard.writeText(lastDiagText);
-    $('#diag-copied').textContent = 'Copiado ✓';
+    $('#diag-copied').textContent = tr('diag.copied') + ' ✓';
     setTimeout(() => ($('#diag-copied').textContent = ''), 2000);
   } catch {
-    $('#diag-copied').textContent = 'No se pudo copiar.';
+    $('#diag-copied').textContent = tr('diag.copyFailed');
   }
 });
 
@@ -60,7 +62,7 @@ async function initUpdates() {
   if (!window.updater) return; // running in a plain browser (dev) — hide the block
   $('#update-block').style.display = '';
   const v = await window.updater.version();
-  $('#upd-status').textContent = `Versión actual: ${v}`;
+  $('#upd-status').textContent = tr('update.currentVersion', { v });
   if (!updatesWired) {
     updatesWired = true;
     $('#upd-check').addEventListener('click', runUpdateCheck);
@@ -70,35 +72,35 @@ async function initUpdates() {
 
 async function runUpdateCheck() {
   const msg = $('#upd-msg');
-  msg.textContent = 'Comprobando…';
+  msg.textContent = tr('update.checking');
   $('#upd-install').style.display = 'none';
   $('#upd-badge').style.display = 'none';
   pendingUpdateZip = null;
   const r = await window.updater.check();
   if (r.status === 'up-to-date') {
-    msg.textContent = 'La app está actualizada.';
+    msg.textContent = tr('update.upToDate');
   } else if (r.status === 'available') {
     pendingUpdateZip = r.zipUrl;
     $('#upd-badge').style.display = '';
     $('#upd-install').style.display = '';
-    msg.textContent = `Disponible la versión ${r.latestVersion}.` + (r.notes ? ` ${r.notes}` : '');
+    msg.textContent = tr('update.available', { v: r.latestVersion }) + (r.notes ? ` ${r.notes}` : '');
   } else if (r.status === 'needs-new-app') {
     msg.innerHTML =
-      `La versión ${esc(r.latestVersion)} requiere descargar la app de nuevo: ` +
-      `<a href="${esc(r.page)}" target="_blank">abrir página</a>.`;
+      `${esc(tr('update.needsNewApp', { v: r.latestVersion }))} ` +
+      `<a href="${esc(r.page)}" target="_blank">${esc(tr('update.openPage'))}</a>.`;
   } else {
-    msg.textContent = `No se pudo comprobar: ${r.message || 'error'}`;
+    msg.textContent = tr('update.checkFailed', { message: r.message || tr('common.error') });
   }
 }
 
 async function runUpdateInstall() {
   if (!pendingUpdateZip) return;
   $('#upd-install').disabled = true;
-  $('#upd-msg').textContent = 'Descargando e instalando… la app se reiniciará.';
+  $('#upd-msg').textContent = tr('update.installing');
   const r = await window.updater.apply(pendingUpdateZip);
   if (!r.ok) {
     $('#upd-install').disabled = false;
-    $('#upd-msg').textContent = `No se pudo instalar: ${r.message || 'error'}`;
+    $('#upd-msg').textContent = tr('update.installFailed', { message: r.message || tr('common.error') });
   }
   // on success the main process relaunches the app automatically
 }
@@ -108,8 +110,8 @@ async function loadReminderPreview() {
     const r = await (await fetch('/api/reminders')).json();
     const c = r.digest.counts;
     $('#rem-preview').textContent = c.total
-      ? `Ahora mismo: ${c.total} abiertas — ${c.overdue} vencidas, ${c.todo} por hacer, ${c.waiting} en espera.`
-      : 'Ahora mismo: no hay tareas abiertas.';
+      ? tr('reminders.preview', { total: c.total, overdue: c.overdue, todo: c.todo, waiting: c.waiting })
+      : tr('reminders.previewEmpty');
   } catch {
     $('#rem-preview').textContent = '';
   }
@@ -124,25 +126,25 @@ $('#save-rem').addEventListener('click', async () => {
       nudgeIntervalDays: Number($('#rem-interval').value) || 2,
     }),
   });
-  $('#rem-saved').textContent = '✓ guardado';
+  $('#rem-saved').textContent = '✓ ' + tr('common.saved');
 });
 
 $('#rem-test').addEventListener('click', async () => {
   await fetch('/api/reminders/test', { method: 'POST' });
-  $('#rem-saved').textContent = 'enviada — revisa tus notificaciones';
+  $('#rem-saved').textContent = tr('reminders.testSent');
 });
 
 $('#rem-digest').addEventListener('click', async () => {
   await fetch('/api/reminders/digest', { method: 'POST' });
-  $('#rem-saved').textContent = 'resumen enviado';
+  $('#rem-saved').textContent = tr('reminders.digestSent');
   loadReminderPreview();
 });
 
 $('#rem-nudge').addEventListener('click', async () => {
   const r = await (await fetch('/api/reminders/nudge', { method: 'POST' })).json();
   $('#rem-saved').textContent = r.result?.nudged
-    ? `${r.result.nudged} tarea(s) avisada(s)`
-    : 'no hay tareas pendientes que avisar';
+    ? tr('reminders.nudged', { n: r.result.nudged })
+    : tr('reminders.nothingToNudge');
   loadReminderPreview();
 });
 
@@ -153,22 +155,58 @@ function fillAiFields(providerId) {
   if (!aiStatusCache) return;
   const p = aiStatusCache.providers.find((x) => x.id === providerId) || aiStatusCache.providers[0];
   $('#ai-model').value = p.model || '';
+  $('#ai-model-bulk').value = p.bulkModel || '';
+  $('#ai-model-vision').value = p.visionModel || '';
   $('#ai-baseurl').value = p.baseUrl || '';
   $('#ai-baseurl-row').style.display = p.id === 'anthropic' ? 'none' : '';
+
+  /*
+   * Providers that run separate regional endpoints (DashScope: mainland vs
+   * Singapore) get a one-click swap. This is not cosmetic — the two are
+   * SEPARATE ACCOUNTS with non-interchangeable API keys, and typing the wrong
+   * host produces an auth error that looks like a bad key rather than a wrong
+   * region. Showing both, with the warning, is what stops that hour of
+   * debugging.
+   */
+  const altBtn = $('#ai-baseurl-alt');
+  const cur = ($('#ai-baseurl').value || '').trim();
+  const alt = (p.baseUrlAlt || '').trim();
+  if (alt && cur && alt !== cur) {
+    // "-intl" is DashScope's international host; anything else is the local one.
+    altBtn.textContent = /-intl\./.test(alt)
+      ? tr('settings.useIntlEndpoint')
+      : tr('settings.useMainlandEndpoint');
+    altBtn.hidden = false;
+    $('#ai-region-note').hidden = false;
+    altBtn.onclick = (e) => {
+      e.preventDefault();
+      // Swap the two hosts and re-render, so the button toggles back and forth
+      // rather than being a one-way door. Mutating the cached entry is enough:
+      // fillAiFields reads from it, and a real save refreshes the cache.
+      const swap = $('#ai-baseurl').value.trim();
+      p.baseUrl = alt;
+      p.baseUrlAlt = swap;
+      fillAiFields(p.id);
+    };
+  } else {
+    altBtn.hidden = true;
+    altBtn.onclick = null;
+    $('#ai-region-note').hidden = true;
+  }
   $('#ai-vision').checked = !!p.vision;
   $('#api-key').value = '';
   $('#api-key').placeholder = p.hasKey
-    ? 'clave guardada — pega otra para reemplazarla'
+    ? tr('ai.keySaved')
     : p.needsKey
-      ? `clave de API${p.keyHint ? ` (${p.keyHint})` : ''}`
-      : 'sin clave (opcional)';
+      ? `${tr('ai.apiKey')}${p.keyHint ? ` (${p.keyHint})` : ''}`
+      : tr('ai.noKeyOptional');
   const active = aiStatusCache.active;
   $('#key-status').textContent =
     active.provider === p.id
       ? active.configured
-        ? `Proveedor activo: ${active.name}.`
-        : 'Este proveedor está seleccionado pero le falta clave o modelo.'
-      : `Al guardar, la IA cambiará a este proveedor. Activo ahora: ${active.name}.`;
+        ? tr('ai.activeProvider', { name: active.name })
+        : tr('ai.missingKeyOrModel')
+      : tr('ai.willSwitch', { name: active.name });
 }
 
 async function loadAiSettings() {
@@ -191,6 +229,8 @@ $('#save-key').addEventListener('click', async () => {
   const body = {
     provider: $('#ai-provider').value,
     model: $('#ai-model').value.trim(),
+    bulkModel: $('#ai-model-bulk').value.trim(),
+    visionModel: $('#ai-model-vision').value.trim(),
     baseUrl: $('#ai-baseurl').value.trim(),
     vision: $('#ai-vision').checked,
   };
@@ -201,22 +241,22 @@ $('#save-key').addEventListener('click', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  $('#key-saved').textContent = '✓ guardado';
+  $('#key-saved').textContent = '✓ ' + tr('common.saved');
   $('#ai-test-result').textContent = '';
   await Promise.all([loadAiSettings(), loadStats()]);
 });
 
 $('#ai-test').addEventListener('click', async () => {
   const out = $('#ai-test-result');
-  out.textContent = 'Probando conexión…';
+  out.textContent = tr('ai.testing');
   try {
     const r = await fetch('/api/ai/test', { method: 'POST' });
     const j = await r.json();
     out.textContent = j.ok
-      ? `✓ ${j.name} respondió: “${j.reply || 'ok'}”`
-      : `✗ ${j.name ? j.name + ' — ' : ''}${j.error || 'falló la conexión'}`;
+      ? `✓ ${tr('ai.replied', { name: j.name, reply: j.reply || 'ok' })}`
+      : `✗ ${j.name ? j.name + ' — ' : ''}${j.error || tr('ai.connectionFailed')}`;
   } catch {
-    out.textContent = '✗ No se pudo probar la conexión.';
+    out.textContent = '✗ ' + tr('ai.testFailed');
   }
 });
 
@@ -226,12 +266,12 @@ $('#save-sched').addEventListener('click', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ schedulerEnabled: $('#sched-on').checked, dailyTime: $('#sched-time').value }),
   });
-  $('#sched-saved').textContent = '✓ guardado';
+  $('#sched-saved').textContent = '✓ ' + tr('common.saved');
 });
 
 async function loadChats() {
   const list = $('#chats-list');
-  list.innerHTML = '<div class="empty">cargando chats…</div>';
+  list.innerHTML = `<div class="empty">${esc(tr('settings.loadingChats'))}</div>`;
   let data;
   try {
     const r = await fetch('/api/chats');
@@ -243,31 +283,31 @@ async function loadChats() {
         const path = e.path ? esc(e.path) : '~/Library/Messages/chat.db';
         list.innerHTML =
           '<div class="empty fda-help">' +
-          '<b>No se puede leer iMessage todavía.</b>' +
-          '<p>Si ya diste <b>Acceso total al disco</b>, el permiso casi siempre no se aplica hasta reiniciar la app. Prueba en orden:</p>' +
+          `<b>${esc(tr('fda.title'))}</b>` +
+          `<p>${esc(tr('fda.intro'))}</p>` +
           '<ol>' +
-          '<li><b>Cierra la app por completo</b> (menú Asistente de Tareas → Salir, o ⌘Q — no solo la ventana) y vuelve a abrirla.</li>' +
-          '<li>Si sigue igual: Ajustes del Sistema → Privacidad y seguridad → <b>Acceso total al disco</b>. <b>Quita</b> “Asistente de Tareas” de la lista con el botón <b>–</b>, vuelve a <b>añadirla</b> con <b>+</b> (o el interruptor apágalo y enciéndelo), y reinicia la app.</li>' +
-          '<li>Asegúrate de que solo haya <b>una copia</b> de la app (p. ej. en Aplicaciones) y de que el permiso esté dado a esa copia.</li>' +
+          `<li>${esc(tr('fda.step1'))}</li>` +
+          `<li>${esc(tr('fda.step2'))}</li>` +
+          `<li>${esc(tr('fda.step3'))}</li>` +
           '</ol>' +
-          `<p class="muted">Archivo que intenta leer: <code>${path}</code></p>` +
-          `<button id="chats-retry">${ico('refresh')}Reintentar</button>` +
+          `<p class="muted">${esc(tr('fda.fileItReads'))} <code>${path}</code></p>` +
+          `<button id="chats-retry">${ico('refresh')}${esc(tr('common.retry'))}</button>` +
           '</div>';
         const retry = document.getElementById('chats-retry');
         if (retry) retry.onclick = () => loadChats();
       } else {
-        list.innerHTML = `<div class="empty">${esc(e.error || 'no se pudieron leer los chats')}</div>`;
+        list.innerHTML = `<div class="empty">${esc(e.error || tr('settings.chatsReadFailed'))}</div>`;
       }
       return;
     }
     data = await r.json();
   } catch {
-    list.innerHTML = '<div class="empty">no se pudieron leer los chats</div>';
+    list.innerHTML = `<div class="empty">${esc(tr('settings.chatsReadFailed'))}</div>`;
     return;
   }
   $('#chats-note').textContent = data.filtering
-    ? 'Solo se incluyen los chats marcados.'
-    : 'Sin selección — se incluyen todos los chats. Marca algunos para limitar.';
+    ? tr('settings.onlyCheckedChats')
+    : tr('settings.noSelectionAllChats');
   list.innerHTML = '';
   for (const c of data.chats) {
     const name = c.displayName || c.name;
@@ -276,7 +316,7 @@ async function loadChats() {
       el(`<label class="chatrow" data-name="${esc((name + ' ' + c.id).toLowerCase())}">
       <input type="checkbox" value="${esc(c.id)}" ${c.selected ? 'checked' : ''} />
       <span class="cn">${esc(name)}${showId ? ` <span class="cid">${esc(c.id)}</span>` : ''}</span>
-      <span class="ct">${c.isGroup ? 'grupo' : 'directo'} · ${c.count}</span>
+      <span class="ct">${esc(c.isGroup ? tr('settings.group') : tr('settings.direct'))} · ${c.count}</span>
     </label>`),
     );
   }
@@ -298,7 +338,7 @@ async function saveChatSelection(ids) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ selectedChats: ids }),
   });
-  $('#chats-saved').textContent = '✓ guardado';
+  $('#chats-saved').textContent = '✓ ' + tr('common.saved');
   await loadChats();
 }
 
@@ -307,3 +347,39 @@ $('#save-chats').addEventListener('click', () => {
   saveChatSelection(ids);
 });
 $('#clear-chats').addEventListener('click', () => saveChatSelection([]));
+
+// ---- Language ----
+// The three buttons show ENDONYMS (Español / English / 中文), which are never
+// translated — a picker that renders every option in the language you can't
+// read is useless. Switching reloads the page: the catalog is server-rendered
+// (see routes/i18n.ts) and every AI prompt is rebuilt from the new setting, so
+// a reload is both the simplest and the most complete way to apply it.
+function paintLangSeg(active) {
+  document.querySelectorAll('#lang-seg .seg-btn').forEach((b) => {
+    const on = b.dataset.lang === active;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+}
+
+document.querySelectorAll('#lang-seg .seg-btn').forEach((b) => {
+  b.onclick = async () => {
+    const lang = b.dataset.lang;
+    if (lang === I18N_LOCALE) return;
+    paintLangSeg(lang);
+    $('#lang-saved').textContent = '…';
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uiLanguage: lang }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      location.reload();
+    } catch {
+      paintLangSeg(I18N_LOCALE);
+      $('#lang-saved').textContent = tr('settings.languageFailed');
+    }
+  };
+});
+paintLangSeg(I18N_LOCALE);

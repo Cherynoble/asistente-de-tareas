@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for "Asistente de Tareas".
+
+  Deliberately MINIMAL. Every key below is here because something this app
+  actually does requires it; anything not needed is absent, because each
+  exception weakens the runtime protections notarization is meant to provide.
+
+  NOT present, on purpose:
+    * com.apple.security.app-sandbox — the app must read
+      ~/Library/Messages/chat.db and launch Google Chrome. Sandboxing it would
+      make both impossible. Full Disk Access is granted through TCC (System
+      Settings → Privacy), which is independent of entitlements.
+    * com.apple.security.automation.apple-events — notifications now go through
+      Electron's own Notification API instead of shelling out to osascript, so
+      the app no longer sends Apple Events. (src/notify/mac.ts keeps an
+      osascript fallback for the plain-node dev server, which is unsigned and
+      therefore unaffected by this file.)
+-->
+<plist version="1.0">
+<dict>
+  <!-- V8 compiles JavaScript at runtime. Electron cannot start without this. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+
+  <!-- V8's non-JIT code paths also map writable-executable memory. -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+
+  <!-- Electron's helper processes are launched with DYLD_* set. -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+
+  <!--
+    Required by the two native modules this app loads:
+      * better-sqlite3        (rebuilt locally for the Electron ABI)
+      * @napi-rs/canvas       (26 MB prebuilt, pulled in transitively by
+                               pdfjs-dist; ships ad-hoc "linker-signed", and IS
+                               loaded at runtime during PDF text extraction —
+                               verified, not assumed)
+    Library validation would otherwise refuse to load a .node that wasn't
+    signed by our team. Re-signing them during packaging is not sufficient in
+    practice for prebuilt binaries, and the failure mode is an opaque crash on
+    the user's Mac rather than on ours.
+  -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

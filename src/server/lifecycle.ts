@@ -12,6 +12,7 @@ import { macNotify } from '../notify/mac.js';
 import { sendDailyDigest, runNudgeSweep } from '../notify/reminders.js';
 import { sweepReminderNotifications } from '../notify/scheduled.js';
 import { getSchedulerConfig } from '../settings.js';
+import { t } from '../i18n.js';
 import { ingestSafely } from './helpers.js';
 
 // Daily auto ingest + process, configurable in-app (Settings tab) and live-
@@ -42,9 +43,9 @@ export function applySchedule(): void {
       // The owner never reads server logs — a failed nightly run used to be
       // completely invisible (tasks just quietly stopped appearing). Say so.
       macNotify({
-        title: 'Asistente de Tareas',
-        subtitle: 'El análisis nocturno falló',
-        message: `No se pudieron analizar los mensajes: ${msg.slice(0, 120)}. Revisa el proveedor de IA en Ajustes.`,
+        title: t('notify.appName'),
+        subtitle: t('notify.cronFailedSubtitle'),
+        message: t('notify.cronFailedMessage', { error: msg.slice(0, 120) }),
         sound: false,
       });
     }

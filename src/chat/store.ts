@@ -85,11 +85,27 @@ export function titleFrom(text: string): string {
  * The transcript has to live in `content` because that is what gets replayed to
  * the model on every later turn. The frontend splits on these markers to render
  * it collapsed instead of dumping 200 lines into a bubble — visible if you open
- * it, out of the way if you don't. `public/app.js` hardcodes the same two
+ * it, out of the way if you don't. `public/app-chat.js` hardcodes the same
  * strings; change one and you must change the other.
+ *
+ * They are a WIRE FORMAT, never UI text: they must NOT be translated.
  */
-export const SEL_OPEN = '⟦SELECCIÓN⟧';
-export const SEL_CLOSE = '⟦/SELECCIÓN⟧';
+export const SEL_OPEN = '⟦SELECTION⟧';
+export const SEL_CLOSE = '⟦/SELECTION⟧';
+
+/**
+ * The original Spanish sentinels. These are already stored inside chat_messages
+ * rows in every existing database, so they can never be retired — only stopped
+ * being written. Readers must accept both pairs forever; writers use the neutral
+ * pair above. This buys locale-neutrality with no migration and no risk to
+ * existing threads (rewriting stored message content to change a marker would
+ * be all downside).
+ */
+export const SEL_OPEN_LEGACY = '⟦SELECCIÓN⟧';
+export const SEL_CLOSE_LEGACY = '⟦/SELECCIÓN⟧';
+
+/** Every sentinel a reader must strip or recognise. */
+export const SEL_MARKERS = [SEL_OPEN, SEL_CLOSE, SEL_OPEN_LEGACY, SEL_CLOSE_LEGACY];
 
 // ---- Memory ----
 export function listMemories(): Memory[] {

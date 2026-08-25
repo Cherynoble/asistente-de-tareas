@@ -25,10 +25,10 @@ function renderTrash() {
     const card = el(`<div class="card">
       <div class="title">${esc(t.title)}</div>
       <div class="detail">${esc(t.detail)}</div>
-      <div class="meta">${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}<span class="badge">${esc(statusLabel(t.status))}</span></div>
+      <div class="meta">${t.clientHint ? `<span>${esc(tr('tasks.clientLabel', { who: displayName(t.clientHint) }))}</span>` : ''}<span class="badge">${esc(statusLabel(t.status))}</span></div>
       <div class="actions">
-        <button class="approve j-restore">${ico('undo')}Restaurar</button>
-        <button class="dismiss j-purge">${ico('trash')}Borrar definitivamente</button>
+        <button class="approve j-restore">${ico('undo')}${esc(tr('trash.restore'))}</button>
+        <button class="dismiss j-purge">${ico('trash')}${esc(tr('trash.purge'))}</button>
       </div>
     </div>`);
     card.querySelector('.j-restore').onclick = async () => {
@@ -36,7 +36,7 @@ function renderTrash() {
       await refreshTaskViews();
     };
     card.querySelector('.j-purge').onclick = async () => {
-      if (!confirm('¿Borrar definitivamente esta tarea? No se puede deshacer.')) return;
+      if (!confirm(tr('trash.confirmPurgeTask'))) return;
       await bulkPost('/api/tasks/bulk', { ids: [Number(t.id)], action: 'purge' });
       await refreshTaskViews();
     };
@@ -52,8 +52,8 @@ function renderTrash() {
       <span class="handle">${esc(c.handle)}</span>
       <span class="rn">${esc(nm)}</span>
       <span class="actions" style="margin-left:auto">
-        <button class="approve j-restore">${ico('undo')}Restaurar</button>
-        <button class="dismiss j-purge">${ico('trash')}Borrar definitivamente</button>
+        <button class="approve j-restore">${ico('undo')}${esc(tr('trash.restore'))}</button>
+        <button class="dismiss j-purge">${ico('trash')}${esc(tr('trash.purge'))}</button>
       </span>
     </div>`);
     card.querySelector('.j-restore').onclick = async () => {
@@ -61,7 +61,7 @@ function renderTrash() {
       await Promise.all([loadSenders(), loadNames(), loadTrash(), loadStats()]);
     };
     card.querySelector('.j-purge').onclick = async () => {
-      if (!confirm('¿Borrar definitivamente este cliente? No se puede deshacer.')) return;
+      if (!confirm(tr('trash.confirmPurgeClient'))) return;
       await bulkPost('/api/clients/bulk', { handles: [c.handle], action: 'purge' });
       await Promise.all([loadSenders(), loadNames(), loadTrash(), loadStats()]);
     };
@@ -70,7 +70,7 @@ function renderTrash() {
 }
 $('#trash-search').addEventListener('input', renderTrash);
 $('#trash-empty').onclick = async () => {
-  if (!confirm('¿Vaciar la papelera? Se borrarán definitivamente todos los elementos eliminados.')) return;
+  if (!confirm(tr('trash.confirmEmpty'))) return;
   await bulkPost('/api/trash/empty', { type: 'all' });
   await Promise.all([loadTrash(), loadSenders(), loadNames(), loadStats()]);
 };

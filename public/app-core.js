@@ -27,8 +27,8 @@ function askText(message, defaultValue = '') {
         <div class="ask-msg">${esc(message)}</div>
         <input class="ask-input" value="${esc(defaultValue)}" />
         <div class="modal-actions">
-          <button class="ask-cancel">Cancelar</button>
-          <button class="primary ask-ok">Aceptar</button>
+          <button class="ask-cancel">${esc(tr('common.cancel'))}</button>
+          <button class="primary ask-ok">${esc(tr('common.accept'))}</button>
         </div>
       </div>
     </div>`);
@@ -50,25 +50,22 @@ function askText(message, defaultValue = '') {
     setTimeout(() => { input.focus(); input.select(); }, 0);
   });
 }
-// Short Spanish date for "task generated on" labels.
-const fmtGen = (ms) =>
-  ms ? new Date(ms).toLocaleDateString('es', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
+// Short date for "task generated on" labels (locale-aware — see app-i18n.js).
+const fmtGen = (ms) => (ms ? fmtDate(ms) : '');
 // Compact date + time a message was sent (feed rows can span many days).
 const fmtMsgTime = (ms) =>
   ms
-    ? new Date(ms).toLocaleString('es', {
+    ? new Date(ms).toLocaleString(I18N_BCP47, {
         day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit',
       })
     : '';
 
-// Spanish labels for task statuses and WhatsApp connection states.
-const STATUS_LABELS = { proposed: 'propuesta', todo: 'por hacer', waiting: 'en espera', done: 'hecho', dismissed: 'descartada', archived: 'archivada', trash: 'en la papelera' };
-const statusLabel = (s) => STATUS_LABELS[s] || s;
-const WA_LABELS = {
-  idle: 'inactivo', starting: 'iniciando', qr: 'código QR', authenticated: 'autenticado',
-  ready: 'conectado', disconnected: 'desconectado',
-};
-const waLabel = (s) => WA_LABELS[s] || s;
+// Task statuses and WhatsApp connection states.
+// The KEYS are the canonical values the API speaks and the database stores —
+// only the displayed text is translated, so switching language never touches
+// data or breaks a request.
+const statusLabel = (s) => (s ? tr(`status.${s}`) : s);
+const waLabel = (s) => (s ? tr(`wa.${s}`) : s);
 
 // handle → display name (phone numbers become real names once assigned).
 let names = {};
@@ -107,7 +104,7 @@ function accountBadge(source, waAccount) {
   const ids = Object.keys(waAccountLabels);
   if (ids.length < 2) return '';
   const label = waAccountLabels[waAccount] || waAccount;
-  return ` <span class="acctbadge" title="Cuenta de WhatsApp">${esc(label)}</span>`;
+  return ` <span class="acctbadge" title="${esc(tr('common.whatsappAccount'))}">${esc(label)}</span>`;
 }
 
 // Turn a raw handle/JID into something readable: assigned name → pushname →
@@ -118,8 +115,8 @@ function prettySender(sender, senderName) {
   if (senderName) return senderName;
   const s = sender || '';
   if (s.endsWith('@c.us')) return '+' + s.replace('@c.us', '');
-  if (s.endsWith('@lid')) return 'contacto de WhatsApp';
-  if (s.endsWith('@g.us')) return 'grupo';
+  if (s.endsWith('@lid')) return tr('sender.whatsappContact');
+  if (s.endsWith('@g.us')) return tr('sender.group');
   return s || '?';
 }
 
@@ -129,11 +126,27 @@ function prettySender(sender, senderName) {
 // same "YYYY-MM-DD" string into the same <input type="date"> and fires the same
 // `change` event, so every existing handler keeps working untouched. Typing
 // directly into the field also still works.
-const DP_MONTHS = [
-  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
-  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
-];
-const DP_DOW = ['L', 'M', 'X', 'J', 'V', 'S', 'D']; // Spanish week starts Monday
+// Month and weekday names come from Intl rather than a translated list: they
+// are calendar data, not UI copy, and Intl already has them correct for every
+// locale (including which day the week starts on, which differs — Monday in
+// Spanish, Sunday in English and Chinese).
+const DP_MONTHS = Array.from({ length: 12 }, (_, m) =>
+  new Intl.DateTimeFormat(I18N_BCP47, { month: 'long' }).format(new Date(2021, m, 1)),
+);
+/** 1 = Monday … 7 = Sunday, per Intl; falls back to Monday where unsupported. */
+const DP_FIRST_DAY = (() => {
+  try {
+    const info = new Intl.Locale(I18N_BCP47).getWeekInfo?.();
+    return info && info.firstDay ? info.firstDay : 1;
+  } catch {
+    return 1;
+  }
+})();
+const DP_DOW = Array.from({ length: 7 }, (_, i) => {
+  // 2021-11-01 was a Monday, so offset from there by the locale's first day.
+  const d = new Date(2021, 10, 1 + ((DP_FIRST_DAY - 1 + i) % 7));
+  return new Intl.DateTimeFormat(I18N_BCP47, { weekday: 'narrow' }).format(d);
+});
 let dpNode = null;
 let dpInput = null;
 let dpView = null; // { y, m } — the month currently on screen
@@ -169,7 +182,10 @@ function dpRender() {
   const selISO = sel ? dpISO(sel.y, sel.m, sel.d) : null;
   const todayISO = (() => { const n = new Date(); return dpISO(n.getFullYear(), n.getMonth(), n.getDate()); })();
   const { y, m } = dpView;
-  const lead = (new Date(y, m, 1).getDay() + 6) % 7; // Monday-first offset
+  // Offset the grid by the locale's first weekday, so the day columns line up
+  // with the DP_DOW headers (Monday-first in Spanish, Sunday-first in English
+  // and Chinese). getDay() is 0=Sunday; DP_FIRST_DAY is 1=Monday…7=Sunday.
+  const lead = (new Date(y, m, 1).getDay() - (DP_FIRST_DAY % 7) + 7) % 7;
   let cells = '';
   for (let i = 0; i < 42; i++) {
     const d = new Date(y, m, i - lead + 1); // JS normalizes over month edges
@@ -182,7 +198,10 @@ function dpRender() {
     ].filter(Boolean).join(' ');
     cells += `<button type="button" class="${cls}" data-iso="${iso}">${d.getDate()}</button>`;
   }
-  dpNode.querySelector('.dp-title').textContent = `${DP_MONTHS[m]} ${y}`;
+  // Chinese writes "2026年3月", Spanish "marzo 2026" — let Intl decide.
+  dpNode.querySelector('.dp-title').textContent = new Intl.DateTimeFormat(I18N_BCP47, {
+    month: 'long', year: 'numeric',
+  }).format(new Date(y, m, 1));
   dpNode.querySelector('.dp-grid').innerHTML = cells;
 }
 
@@ -209,17 +228,17 @@ function openDatePicker(input) {
   const sel = dpParse(input.value);
   const now = new Date();
   dpView = sel ? { y: sel.y, m: sel.m } : { y: now.getFullYear(), m: now.getMonth() };
-  dpNode = el(`<div class="dp" role="dialog" aria-label="Elegir fecha">
+  dpNode = el(`<div class="dp" role="dialog" aria-label="${esc(tr('datepicker.choose'))}">
     <div class="dp-head">
-      <button type="button" class="dp-prev iconbtn" aria-label="Mes anterior">${ico('left')}</button>
+      <button type="button" class="dp-prev iconbtn" aria-label="${esc(tr('datepicker.prevMonth'))}">${ico('left')}</button>
       <span class="dp-title"></span>
-      <button type="button" class="dp-next iconbtn" aria-label="Mes siguiente">${ico('right')}</button>
+      <button type="button" class="dp-next iconbtn" aria-label="${esc(tr('datepicker.nextMonth'))}">${ico('right')}</button>
     </div>
     <div class="dp-dow">${DP_DOW.map((d) => `<span>${d}</span>`).join('')}</div>
     <div class="dp-grid"></div>
     <div class="dp-foot">
-      <button type="button" class="dp-clear">Borrar</button>
-      <button type="button" class="dp-today primary">Hoy</button>
+      <button type="button" class="dp-clear">${esc(tr('datepicker.clear'))}</button>
+      <button type="button" class="dp-today primary">${esc(tr('datepicker.today'))}</button>
     </div>
   </div>`);
   document.body.append(dpNode);
@@ -298,7 +317,7 @@ function setThemePref(pref) {
   else paint();
   const saved = $('#theme-saved');
   if (saved) {
-    saved.innerHTML = `${ico('check')}guardado`;
+    saved.innerHTML = `${ico('check')}${esc(tr('common.saved'))}`;
     setTimeout(() => (saved.innerHTML = ''), 1800);
   }
 }
@@ -330,18 +349,48 @@ document.querySelectorAll('.tab').forEach((btn) => {
       loadChats();
       loadWaAccounts();
     }
+    if (id === 'help') loadHelpDoc();
   });
 });
+
+/**
+ * The Help tab is long-form prose with inline markup, so it is NOT translated
+ * key-by-key — splitting sentences around <b> tags produces word salad in any
+ * language whose word order differs. Each language gets its own hand-written
+ * fragment instead, loaded on first open.
+ *
+ * innerHTML is safe here: the source is our own static file shipped in public/,
+ * never user or message content.
+ */
+let helpDocLoaded = false;
+async function loadHelpDoc() {
+  if (helpDocLoaded) return;
+  const box = $('#help-doc');
+  if (!box) return;
+  const tryLoad = async (loc) => {
+    const res = await fetch(`/i18n/help.${loc}.html`);
+    return res.ok ? res.text() : null;
+  };
+  try {
+    const html = (await tryLoad(I18N_LOCALE)) ?? (await tryLoad('es'));
+    if (html) {
+      box.innerHTML = html;
+      helpDocLoaded = true;
+    }
+  } catch {
+    /* leave the panel empty rather than breaking the tab */
+  }
+}
 
 // ---- Stats ----
 async function loadStats() {
   const s = await (await fetch('/api/stats')).json();
   $('#stats').innerHTML =
-    `<span><b>${s.messages}</b> mensajes</span>` +
-    `<span><b>${s.proposed}</b> propuestas</span>` +
-    `<span><b>${s.todo + s.waiting}</b> abiertas</span>` +
-    `<span><b>${s.done}</b> hechas</span>`;
+    `<span><b>${s.messages}</b> ${esc(tr('stats.messages'))}</span>` +
+    `<span><b>${s.proposed}</b> ${esc(tr('stats.proposed'))}</span>` +
+    `<span><b>${s.todo + s.waiting}</b> ${esc(tr('stats.open'))}</span>` +
+    `<span><b>${s.done}</b> ${esc(tr('stats.done'))}</span>`;
   $('#inbox-count').textContent = s.proposed;
   if (typeof s.trash === 'number') $('#trash-pill').textContent = s.trash;
-  if (!s.hasApiKey) $('#proc-status').textContent = 'Configura el proveedor de IA en Ajustes';
+  if (!s.hasApiKey) $('#proc-status').textContent = tr('common.configureAiProvider');
 }

@@ -12,7 +12,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { execFile } = require('node:child_process');
 
-const REPO = 'Cherynoble/asistente-de-tareas';
+const {
+  REPO,
+  DOWNLOAD_TIMEOUT_MS,
+  fetchWithTimeout,
+  cmpVersion,
+  isAllowedZipUrl,
+  verifyBundle,
+} = require('./update-core.cjs');
 const RELEASES_PAGE = `https://github.com/${REPO}/releases/latest`;
 
 const BUNDLE_ROOT = path.join(__dirname, '..');
@@ -25,18 +32,6 @@ function readJson(p) {
   } catch {
     return null;
   }
-}
-
-/** Compare dotted versions: -1 if a<b, 0 if equal, 1 if a>b. */
-function cmpVersion(a, b) {
-  const pa = String(a || '0').split('.').map((n) => parseInt(n, 10) || 0);
-  const pb = String(b || '0').split('.').map((n) => parseInt(n, 10) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] || 0;
-    const y = pb[i] || 0;
-    if (x !== y) return x < y ? -1 : 1;
-  }
-  return 0;
 }
 
 function currentCodeVersion() {
@@ -59,7 +54,7 @@ function shellVersion() {
  */
 async function checkForUpdate() {
   try {
-    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+    const res = await fetchWithTimeout(`https://api.github.com/repos/${REPO}/releases/latest`, {
       headers: { ...UA, Accept: 'application/vnd.github+json' },
     });
     if (!res.ok) {
@@ -73,7 +68,9 @@ async function checkForUpdate() {
     if (!manifestAsset || !zipAsset) {
       return { status: 'error', message: 'La versión publicada no trae los archivos esperados.' };
     }
-    const manifest = await (await fetch(manifestAsset.browser_download_url, { headers: UA })).json();
+    const manifestRes = await fetchWithTimeout(manifestAsset.browser_download_url, { headers: UA });
+    if (!manifestRes.ok) return { status: 'error', message: `No se pudo leer el manifiesto (HTTP ${manifestRes.status}).` };
+    const manifest = await manifestRes.json();
     const latest = manifest.version;
     const current = currentCodeVersion();
 
@@ -88,29 +85,10 @@ async function checkForUpdate() {
       latestVersion: latest,
       notes: manifest.notes || rel.body || '',
       zipUrl: zipAsset.browser_download_url,
+      sha256: manifest.sha256 || '',
     };
   } catch (err) {
     return { status: 'error', message: String((err && err.message) || err) };
-  }
-}
-
-/**
- * Only install zips that are release assets of OUR repo. applyUpdate is reachable
- * from the renderer over IPC, so without this check a compromised page could
- * point the updater at an arbitrary zip and get its code run on next launch.
- * (GitHub redirects asset downloads to objects.githubusercontent.com; fetch
- * follows that redirect internally, so validating the initial URL is enough.)
- */
-function isAllowedZipUrl(u) {
-  try {
-    const url = new URL(String(u));
-    return (
-      url.protocol === 'https:' &&
-      url.hostname === 'github.com' &&
-      url.pathname.startsWith(`/${REPO}/releases/download/`)
-    );
-  } catch {
-    return false;
   }
 }
 
@@ -140,13 +118,34 @@ function swapIn(stagedDir, name) {
  * the external code dir. Returns { ok, version } or { ok:false, message }.
  * The caller relaunches afterwards.
  */
-async function applyUpdate(zipUrl) {
+async function applyUpdate(requestedZipUrl) {
   if (!app.isPackaged) return { ok: false, message: 'Las actualizaciones solo se aplican en la app instalada.' };
+
+  // Re-derive the URL and its hash from the release manifest instead of trusting
+  // what came back over IPC. applyUpdate is reachable from the renderer, so a
+  // compromised page could otherwise nominate any asset under our releases path
+  // (isAllowedZipUrl only pins host + path prefix) and get its code executed on
+  // the next launch. The renderer's value is now only a sanity check.
+  const latest = await checkForUpdate();
+  if (latest.status === 'error') return { ok: false, message: latest.message };
+  if (latest.status !== 'available') return { ok: false, message: 'No hay ninguna actualización que instalar.' };
+  const zipUrl = latest.zipUrl;
   if (!isAllowedZipUrl(zipUrl)) return { ok: false, message: 'URL de actualización no permitida.' };
+  if (requestedZipUrl && requestedZipUrl !== zipUrl) {
+    return { ok: false, message: 'La actualización cambió mientras se descargaba. Vuelve a intentarlo.' };
+  }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dadsapp-update-'));
   try {
     const zipPath = path.join(tmp, 'app-bundle.zip');
-    const buf = Buffer.from(await (await fetch(zipUrl, { headers: UA })).arrayBuffer());
+    const res = await fetchWithTimeout(zipUrl, { headers: UA }, DOWNLOAD_TIMEOUT_MS);
+    if (!res.ok) return { ok: false, message: `No se pudo descargar la actualización (HTTP ${res.status}).` };
+    const buf = Buffer.from(await res.arrayBuffer());
+
+    // An integrity check an attacker can skip by omitting the field is not an
+    // integrity check: verifyBundle() rejects a missing hash as well as a wrong
+    // one. release.mjs always publishes sha256, so absence is a fault.
+    const verdict = verifyBundle(buf, latest.sha256);
+    if (!verdict.ok) return { ok: false, message: verdict.message };
     fs.writeFileSync(zipPath, buf);
 
     const extracted = path.join(tmp, 'x');

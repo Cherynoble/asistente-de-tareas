@@ -1,0 +1,52 @@
+<h2>1. Where the messages come from</h2>
+          <p>The app merges two sources into a single database:</p>
+          <ul>
+            <li><b>iMessage</b> — read straight off the Mac (read-only). Messages do <b>not</b> arrive on their own: you have to bring them in with <b>Import history</b> (or the automatic daily run).</li>
+            <li><b>WhatsApp</b> — a mirror of WhatsApp Web (read-only, it never sends). While the app is open and connected, new messages are <b>captured automatically</b>. Older ones are brought in with Import history.</li>
+          </ul>
+          <p>In <b>Settings</b> you choose which conversations are included from each source. If you choose none, all of them are included.</p>
+
+          <h2>2. “Import history” — filling the database</h2>
+          <p>Brings <b>older</b> messages into the app. The number you type means:</p>
+          <ul>
+            <li><b>WhatsApp:</b> how many messages from <b>each</b> included conversation (e.g. 200 → the last 200 of every chat).</li>
+            <li><b>iMessage:</b> how many messages in <b>total</b>, most recent first.</li>
+          </ul>
+          <p>Importing <b>only stores</b> the messages; it does not propose tasks yet. It is normal for nothing new to appear in the Inbox after importing until you process. Importing again does not duplicate anything: messages already stored are ignored.</p>
+
+          <h2>3. “Process new messages” — analysing and proposing tasks</h2>
+          <p>Takes the messages that have <b>not been analysed</b> yet and runs them through the AI. That is where the <b>proposed tasks</b> in the <b>Inbox</b> tab come from. It also:</p>
+          <ul>
+            <li>“Reads” every image or PDF with vision (to spot quotations, product photos, and so on).</li>
+            <li>Marks a message as <b>analysed</b> only once, so the next run does not spend anything on it again.</li>
+            <li>Works <b>newest to oldest</b>: today's messages are handled on the first pass, even if you have just imported thousands of old ones.</li>
+            <li>Analyses a limited amount per pass. If older history is still pending, the status says so (“N older messages still queued”). Press <b>Process</b> again whenever you like, or let the automatic daily run drain it.</li>
+          </ul>
+
+          <h2>4. “I sent a message and it isn't showing”</h2>
+          <p>It is almost always one of these three things:</p>
+          <ol>
+            <li><b>iMessage is not captured automatically.</b> First <b>Import history</b>, then <b>Process</b>.</li>
+            <li><b>That conversation is not included.</b> Check the chat selection in Settings.</li>
+            <li><b>You haven't processed it yet.</b> Storing a message and analysing it are two separate steps. Press <b>Process new messages</b>: because it starts with the most recent, whatever you just sent or received is handled on that same pass.</li>
+          </ol>
+
+          <h2>5. The “Messages” tab</h2>
+          <p>Shows your conversations exactly as the app stored them, looking the way they do in WhatsApp or iMessage. Use it to check at a glance <b>what was really imported</b> from each chat and what is missing.</p>
+          <ul>
+            <li>On the left are all the conversations with their message count, how many are still <b>unprocessed</b>, and how many have files. <b>All</b> of them appear, including the ones not included in Settings — those are marked “not imported”.</li>
+            <li>The search box on the left finds both conversations and text inside messages. Clicking a result takes you to that exact message.</li>
+            <li>Inside a conversation you can search text, filter by <b>unprocessed</b> or <b>with files</b>, and jump to a specific date with the calendar.</li>
+          </ul>
+          <p>You can <b>select messages</b> (tick the box; hold Shift to select a range, and click a date to take the whole day, up to 200) and then:</p>
+          <ul>
+            <li><b>Analyse</b> — runs them through the AI again, and any tasks that come out appear in the <b>Inbox</b>. It is safe to repeat: it does not change whether the message counted as analysed. If nothing is proposed, it is almost always because you already have an open task covering it — and it shows you which.</li>
+            <li><b>Send to Chat</b> — opens a new conversation with the assistant carrying those messages, so you can ask about them or have it create a task.</li>
+          </ul>
+
+          <h2>6. Recommended routine</h2>
+          <ul>
+            <li><b>Day to day:</b> leave the app open. WhatsApp captures itself; press <b>Process new messages</b> whenever you want to review new tasks.</li>
+            <li><b>Big catch-up:</b> <b>Import history</b> with a high number, then <b>Process</b>. Recent things come out straight away; for older history, press Process again now and then (or let the daily run empty it on its own).</li>
+            <li><b>Reviewing tasks:</b> check the <b>Inbox</b> (proposals), approve them into <b>Tasks</b>, and use a task's <b>view file</b> link to jump to the file that produced it in <b>Files</b>.</li>
+          </ul>

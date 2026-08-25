@@ -33,7 +33,7 @@ async function renderFocus() {
     if (!items.length) return;
     box.hidden = false;
     const head = el(
-      `<div class="att-focus-head"><span>${ico('clip')}Archivo de la tarea</span><button class="att-focus-clear">quitar</button></div>`,
+      `<div class="att-focus-head"><span>${ico('clip')}${esc(tr('att.taskFile'))}</span><button class="att-focus-clear">${esc(tr('att.remove'))}</button></div>`,
     );
     head.querySelector('.att-focus-clear').onclick = () => {
       attFocusId = null;
@@ -58,7 +58,7 @@ async function loadAttachments(reset) {
   }
   if (attLoading || attDone) return;
   attLoading = true;
-  $('#att-status').textContent = 'cargando…';
+  $('#att-status').textContent = tr('common.loading');
   try {
     const r = await (await fetch(`/api/attachments?limit=${ATT_PAGE}&offset=${attOffset}`)).json();
     attItems.push(...(r.attachments || []));
@@ -66,7 +66,7 @@ async function loadAttachments(reset) {
     attDone = !!r.done;
   } catch {
     attLoading = false;
-    $('#att-status').textContent = 'no se pudieron cargar';
+    $('#att-status').textContent = tr('att.loadFailed');
     return;
   }
   attLoading = false;
@@ -86,13 +86,13 @@ async function downloadFile(url, filename) {
     const objUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = objUrl;
-    a.download = filename || 'archivo';
+    a.download = filename || tr('att.file');
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(objUrl), 5000);
   } catch {
-    alert('No se pudo descargar el archivo.');
+    alert(tr('att.downloadFailed'));
   }
 }
 
@@ -107,11 +107,11 @@ function attWho(a) {
 // repeats the filename underneath it and tells you nothing.
 function attExt(a) {
   const m = /\.([a-z0-9]{2,5})$/i.exec(a.filename || '');
-  return m ? m[1].toUpperCase() : 'Archivo';
+  return m ? m[1].toUpperCase() : tr('att.fileCap');
 }
 
 function attMediaHtml(a, src) {
-  const label = esc(a.filename || a.category || 'archivo');
+  const label = esc(a.filename || a.category || tr('att.file'));
   if (a.category === 'image') return `<img class="att-thumb" loading="lazy" src="${src}" alt="${label}" />`;
   if (a.category === 'video') return `<video class="att-thumb" controls preload="metadata" src="${src}"></video>`;
   if (a.category === 'pdf')
@@ -142,22 +142,22 @@ function attCard(a, list, idx) {
   let media;
   if (st === 'ok') media = attMediaHtml(a, src);
   else if (st === 'fetch')
-    media = `<div class="att-thumb att-icon att-unavail att-fetch"><button class="att-load">${ico('download')}Ver archivo</button><span>guardado en WhatsApp</span></div>`;
+    media = `<div class="att-thumb att-icon att-unavail att-fetch"><button class="att-load">${ico('download')}${esc(tr('att.viewFile'))}</button><span>${esc(tr('att.storedInWhatsapp'))}</span></div>`;
   else if (st === 'fda')
-    media = `<div class="att-thumb att-icon att-unavail">${ico('lock', 'ico-xl')}<span>Activa Acceso total al disco</span></div>`;
-  else media = `<div class="att-thumb att-icon att-unavail">${ico('ban', 'ico-xl')}<span>No está en este Mac</span></div>`;
+    media = `<div class="att-thumb att-icon att-unavail">${ico('lock', 'ico-xl')}<span>${esc(tr('att.needsFda'))}</span></div>`;
+  else media = `<div class="att-thumb att-icon att-unavail">${ico('ban', 'ico-xl')}<span>${esc(tr('att.notOnThisMac'))}</span></div>`;
   const name = a.filename || a.category;
   // Download only makes sense when the file is (or can be) fetched.
   const canDownload = st === 'ok' || st === 'fetch';
   const card = el(`<div class="att-card">
-    <div class="att-media">${media}<button class="att-expand" title="Vista previa" aria-label="Vista previa">${ico('expand')}</button></div>
+    <div class="att-media">${media}<button class="att-expand" title="${esc(tr('att.preview'))}" aria-label="${esc(tr('att.preview'))}">${ico('expand')}</button></div>
     <div class="att-meta">
       <div class="att-name" title="${esc(name)}">${esc(name)}</div>
       <div class="att-sub">${sourceBadge(a.source)}${accountBadge(a.source, a.waAccount)} ${attWho(a)}</div>
       ${a.chatName ? `<div class="att-sub att-where" title="${esc(a.chatName)}">${esc(a.chatName)}</div>` : ''}
       <div class="att-sub att-when">${esc(fmtMsgTime(a.ts))}</div>
     </div>
-    ${canDownload ? `<a class="att-dl" href="${src}&download=1" title="Descargar una copia" aria-label="Descargar una copia">${ico('download')}</a>` : ''}
+    ${canDownload ? `<a class="att-dl" href="${src}&download=1" title="${esc(tr('att.downloadCopy'))}" aria-label="${esc(tr('att.downloadCopy'))}">${ico('download')}</a>` : ''}
   </div>`);
 
   // Open the Quick-Look-style preview from the ⤢ button, or by clicking the tile
@@ -170,7 +170,7 @@ function attCard(a, list, idx) {
     openHere();
   });
 
-  if (st === 'ok') attWireError(card, 'no disponible');
+  if (st === 'ok') attWireError(card, tr('att.unavailable'));
 
   // WhatsApp media not downloaded yet: fetch on demand only when the user asks
   // (auto-fetching a whole gallery of old messages is slow and often fails).
@@ -178,11 +178,11 @@ function attCard(a, list, idx) {
   if (loadBtn)
     loadBtn.onclick = () => {
       const box = card.querySelector('.att-media');
-      box.innerHTML = `<div class="att-thumb att-icon">${ico('download', 'ico-xl')}<span>descargando…</span></div>`;
+      box.innerHTML = `<div class="att-thumb att-icon">${ico('download', 'ico-xl')}<span>${esc(tr('att.downloading'))}</span></div>`;
       // A cache-busting param forces a fresh request that triggers the download.
       const freshSrc = `${src}&t=${Date.now()}`;
       box.innerHTML = attMediaHtml(a, freshSrc);
-      attWireError(card, 'no disponible — conecta WhatsApp');
+      attWireError(card, tr('att.unavailableConnectWa'));
     };
 
   // Download without navigating the window (would white-screen in Electron).
@@ -205,11 +205,11 @@ function renderAttachments() {
       (!typ || a.category === typ) &&
       matches(q, a.filename, displayName(a.sender), a.senderName, a.chatName, a.mime),
   );
-  $('#att-count').textContent = items.length ? `${items.length} archivo(s)` : '';
+  $('#att-count').textContent = items.length ? tr('att.fileCount', { n: items.length }) : '';
   if (!items.length) {
     grid.append(
       el(
-        `<div class="empty">${attItems.length ? ico('search', 'ico-xl') + 'Nada coincide con la búsqueda.' : ico('clip', 'ico-xl') + 'No hay adjuntos en los chats incluidos todavía.'}</div>`,
+        `<div class="empty">${attItems.length ? ico('search', 'ico-xl') + esc(tr('common.noSearchMatch')) : ico('clip', 'ico-xl') + esc(tr('att.empty'))}</div>`,
       ),
     );
   } else {
@@ -267,7 +267,7 @@ function qlRender() {
   const okMedia = stage.querySelector('img.ql-media, video.ql-media');
   if (st === 'ok' && okMedia)
     okMedia.addEventListener('error', () => {
-      stage.innerHTML = `<div class="ql-note">${ico('ban', 'ico-xl')}<div>No se pudo cargar el archivo.</div></div>`;
+      stage.innerHTML = `<div class="ql-note">${ico('ban', 'ico-xl')}<div>${esc(tr('att.loadFileFailed'))}</div></div>`;
     });
 
   const name = a.filename || a.category;
@@ -277,8 +277,8 @@ function qlRender() {
     `<div class="ql-sub">${sourceBadge(a.source)}${accountBadge(a.source, a.waAccount)} ${attWho(a)}` +
     `${a.chatName ? ` · ${esc(a.chatName)}` : ''} · ${esc(fmtMsgTime(a.ts))}</div>` +
     `<div class="ql-tools">` +
-    `${canDownload ? `<button class="ql-dl">${ico('download')}Descargar copia</button>` : ''}` +
-    `${a.category === 'pdf' && st === 'ok' ? `<a class="ql-open" href="${src}" target="_blank" rel="noopener">Abrir en pestaña</a>` : ''}` +
+    `${canDownload ? `<button class="ql-dl">${ico('download')}${esc(tr('att.downloadCopyBtn'))}</button>` : ''}` +
+    `${a.category === 'pdf' && st === 'ok' ? `<a class="ql-open" href="${src}" target="_blank" rel="noopener">${esc(tr('att.openInTab'))}</a>` : ''}` +
     `<span class="ql-pos">${qlIdx + 1} / ${qlList.length}</span></div>`;
   const dlb = cap.querySelector('.ql-dl');
   if (dlb) dlb.onclick = () => downloadFile(`${src}&download=1`, name);

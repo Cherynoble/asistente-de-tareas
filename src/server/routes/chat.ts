@@ -4,7 +4,7 @@ import path from 'node:path';
 import express from 'express';
 import { db } from '../../db/index.js';
 import { config } from '../../config.js';
-import { AI_NOT_CONFIGURED, hasAiKey } from '../../ai/index.js';
+import { aiNotConfigured, hasAiKey } from '../../ai/index.js';
 import { runTurn } from '../../chat/index.js';
 import {
   listThreads,
@@ -60,7 +60,7 @@ r.delete('/api/threads/:id', (req, res) => {
  */
 r.post('/api/chat', async (req, res) => {
   if (!hasAiKey()) {
-    res.status(400).json({ error: AI_NOT_CONFIGURED });
+    res.status(400).json({ error: aiNotConfigured });
     return;
   }
   const body = (req.body as { threadId?: number; message?: string; contextIds?: unknown }) ?? {};
@@ -122,7 +122,7 @@ r.delete('/api/memory/:id', (req, res) => {
  */
 r.post('/api/chat/upload', async (req, res) => {
   if (!hasAiKey()) {
-    res.status(400).json({ error: AI_NOT_CONFIGURED });
+    res.status(400).json({ error: aiNotConfigured });
     return;
   }
   const b =

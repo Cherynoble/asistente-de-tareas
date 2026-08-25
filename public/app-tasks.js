@@ -36,7 +36,7 @@ function makeSelection(key, getVisibleIds) {
   const allBox = $(`#${key}-all`);
   function refresh() {
     if (bar) bar.hidden = selected.size === 0;
-    if (countEl) countEl.textContent = selected.size ? `${selected.size} seleccionada(s)` : '';
+    if (countEl) countEl.textContent = selected.size ? tr('common.selectedCount', { n: selected.size }) : '';
     if (allBox) {
       const ids = getVisibleIds();
       allBox.checked = ids.length > 0 && ids.every((i) => selected.has(i));
@@ -87,7 +87,7 @@ async function refreshTaskViews() {
 async function bulkTasks(selection, action, value) {
   const ids = selection.ids().map(Number).filter((n) => Number.isFinite(n));
   if (!ids.length) return;
-  if (action === 'purge' && !confirm(`¿Borrar definitivamente ${ids.length} tarea(s)? No se puede deshacer.`)) return;
+  if (action === 'purge' && !confirm(tr('tasks.confirmPurgeMany', { n: ids.length }))) return;
   await bulkPost('/api/tasks/bulk', { ids, action, value });
   selection.clear();
   await refreshTaskViews();
@@ -96,7 +96,7 @@ async function bulkTasks(selection, action, value) {
 async function bulkClients(selection, action) {
   const handles = selection.ids();
   if (!handles.length) return;
-  if (action === 'purge' && !confirm(`¿Borrar definitivamente ${handles.length} cliente(s)? No se puede deshacer.`)) return;
+  if (action === 'purge' && !confirm(tr('clients.confirmPurgeMany', { n: handles.length }))) return;
   await bulkPost('/api/clients/bulk', { handles, action });
   selection.clear();
   await Promise.all([loadSenders(), loadNames(), loadTrash(), loadStats()]);
@@ -121,7 +121,7 @@ function renderInbox() {
   list.innerHTML = '';
   const items = filteredInbox();
   if (!items.length) {
-    list.append(el(`<div class="empty">${inboxItems.length ? ico('search', 'ico-xl') + 'Nada coincide con la búsqueda.' : ico('inbox', 'ico-xl') + 'Aún no hay tareas propuestas. Usa la pestaña Proceso para encontrar algunas.'}</div>`));
+    list.append(el(`<div class="empty">${inboxItems.length ? ico('search', 'ico-xl') + esc(tr('common.noSearchMatch')) : ico('inbox', 'ico-xl') + esc(tr('inbox.empty'))}</div>`));
     inboxSel.refresh();
     return;
   }
@@ -132,13 +132,13 @@ function renderInbox() {
       <div class="cardbody">
         <div class="title">${esc(t.title)}</div>
         <div class="detail">${esc(t.detail)}</div>
-        ${t.sourceQuote ? `<div class="quote">${ico('search')}<span class="qtext">buscar ${who ? 'a ' + esc(who) : ''}: <span>"${esc(t.sourceQuote)}"</span></span></div>` : ''}
+        ${t.sourceQuote ? `<div class="quote">${ico('search')}<span class="qtext">${esc(who ? tr('tasks.searchFor', { who }) : tr('tasks.search'))}: <span>"${esc(t.sourceQuote)}"</span></span></div>` : ''}
         ${t.sourceBody && !t.sourceQuote ? `<div class="src">${t.hasAttachment ? ico('clip') + ' ' : ''}${esc(t.sourceBody.slice(0, 160))}</div>` : ''}
-        ${t.hasAttachment && t.sourceMessageId ? `<div class="filelink"><a href="#" class="j-file">${ico('clip')}ver archivo</a></div>` : ''}
-        <div class="meta">${who ? `<span>cliente: ${esc(who)}</span>` : ''}${t.createdAt ? `<span>generada: ${esc(fmtGen(t.createdAt))}</span>` : ''}${accountBadge(t.source, t.waAccount)}</div>
+        ${t.hasAttachment && t.sourceMessageId ? `<div class="filelink"><a href="#" class="j-file">${ico('clip')}${esc(tr('tasks.viewFile'))}</a></div>` : ''}
+        <div class="meta">${who ? `<span>${esc(tr('tasks.clientLabel', { who }))}</span>` : ''}${t.createdAt ? `<span>${esc(tr('tasks.generatedLabel', { date: fmtGen(t.createdAt) }))}</span>` : ''}${accountBadge(t.source, t.waAccount)}</div>
         <div class="actions">
-          <button class="approve j-approve">${ico('check')}Aprobar</button>
-          <button class="dismiss j-del iconbtn" title="Eliminar" aria-label="Eliminar">${ico('trash')}</button>
+          <button class="approve j-approve">${ico('check')}${esc(tr('inbox.approve'))}</button>
+          <button class="dismiss j-del iconbtn" title="${esc(tr('common.delete'))}" aria-label="${esc(tr('common.delete'))}">${ico('trash')}</button>
         </div>
       </div>
     </div>`);
@@ -224,15 +224,15 @@ function renderTasks() {
         <div class="title">${esc(t.title)}</div>
         <div class="detail">${esc(t.detail)}</div>
         ${t.sourceQuote ? `<div class="quote">${ico('search')}<span>"${esc(t.sourceQuote)}"</span></div>` : ''}
-        ${t.hasAttachment && t.sourceMessageId ? `<div class="filelink"><a href="#" class="j-file">${ico('clip')}ver archivo</a></div>` : ''}
+        ${t.hasAttachment && t.sourceMessageId ? `<div class="filelink"><a href="#" class="j-file">${ico('clip')}${esc(tr('tasks.viewFile'))}</a></div>` : ''}
         <div class="meta">
-          ${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}${accountBadge(t.source, t.waAccount)}
-          <label class="due ${overdue ? 'overdue' : ''}">vence <input type="date" class="duedate" value="${dateInput(t.dueAt)}" /></label>
+          ${t.clientHint ? `<span>${esc(tr('tasks.clientLabel', { who: displayName(t.clientHint) }))}</span>` : ''}${accountBadge(t.source, t.waAccount)}
+          <label class="due ${overdue ? 'overdue' : ''}">${esc(tr('tasks.dueLabel'))} <input type="date" class="duedate" value="${dateInput(t.dueAt)}" /></label>
         </div>
         <div class="actions">
           <select class="status">${options}</select>
-          <button class="archivebtn">${ico('archive')}Archivar</button>
-          <button class="dismiss j-del iconbtn" title="Eliminar" aria-label="Eliminar">${ico('trash')}</button>
+          <button class="archivebtn">${ico('archive')}${esc(tr('tasks.archive'))}</button>
+          <button class="dismiss j-del iconbtn" title="${esc(tr('common.delete'))}" aria-label="${esc(tr('common.delete'))}">${ico('trash')}</button>
         </div>
       </div>
     </div>`);
@@ -299,7 +299,7 @@ function renderArchive() {
   list.innerHTML = '';
   const items = filteredArchive();
   if (!items.length) {
-    list.append(el(`<div class="empty">${archiveItems.length ? ico('search', 'ico-xl') + 'Nada coincide con la búsqueda.' : ico('archive', 'ico-xl') + 'No hay nada archivado todavía.'}</div>`));
+    list.append(el(`<div class="empty">${archiveItems.length ? ico('search', 'ico-xl') + esc(tr('common.noSearchMatch')) : ico('archive', 'ico-xl') + esc(tr('archive.empty'))}</div>`));
     archiveSel.refresh();
     return;
   }
@@ -309,10 +309,10 @@ function renderArchive() {
       <div class="cardbody">
         <div class="title">${esc(t.title)}</div>
         <div class="detail">${esc(t.detail)}</div>
-        <div class="meta"><span class="badge b-done">${esc(statusLabel(t.status))}</span>${t.clientHint ? `<span>cliente: ${esc(displayName(t.clientHint))}</span>` : ''}</div>
+        <div class="meta"><span class="badge b-done">${esc(statusLabel(t.status))}</span>${t.clientHint ? `<span>${esc(tr('tasks.clientLabel', { who: displayName(t.clientHint) }))}</span>` : ''}</div>
         <div class="actions">
-          <button class="approve j-unarchive">${ico('undo')}Desarchivar</button>
-          <button class="dismiss j-del iconbtn" title="Eliminar" aria-label="Eliminar">${ico('trash')}</button>
+          <button class="approve j-unarchive">${ico('undo')}${esc(tr('archive.unarchive'))}</button>
+          <button class="dismiss j-del iconbtn" title="${esc(tr('common.delete'))}" aria-label="${esc(tr('common.delete'))}">${ico('trash')}</button>
         </div>
       </div>
     </div>`);

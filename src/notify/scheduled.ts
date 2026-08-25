@@ -1,5 +1,6 @@
 import { db } from '../db/index.js';
 import { macNotify } from './mac.js';
+import { t } from '../i18n.js';
 
 /**
  * One-off reminders the chat assistant schedules on request ("recuérdame mañana
@@ -64,7 +65,7 @@ export function sweepReminderNotifications(now = Date.now()): number {
     .prepare(`SELECT id, text FROM ai_reminders WHERE dismissed_at IS NULL AND notified_at IS NULL AND due_at <= ?`)
     .all(now) as { id: number; text: string }[];
   for (const r of due) {
-    macNotify({ title: 'Recordatorio', message: r.text });
+    macNotify({ title: t('notify.reminder'), message: r.text });
     db().prepare(`UPDATE ai_reminders SET notified_at = ? WHERE id = ?`).run(now, r.id);
   }
   return due.length;
