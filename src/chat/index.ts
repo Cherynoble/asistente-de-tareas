@@ -1,7 +1,9 @@
 import { db } from '../db/index.js';
 import { splitAtt } from '../attachments.js';
-import { aiProvider, type AiMsg, type AiTool } from '../ai/index.js';
+import { aiProvider, type AiChatProvider, type AiMsg, type AiTool } from '../ai/index.js';
+import { clampItem, clampBlockKeepingEnd } from '../ai/budget.js';
 import { nameMap, resolveClientHint } from '../names.js';
+import { replyLanguageInstruction } from '../i18n.js';
 import { addMessage, threadMessages, listMemories, saveMemory } from './store.js';
 import { scheduleReminder } from '../notify/scheduled.js';
 import { describeAttachment } from '../extract/vision.js';
@@ -17,29 +19,44 @@ export interface ChatMsg {
 // resolveClientHint moved to ../names.ts in 1.7.2 so the extraction pipeline
 // shares one definition of "which contact is this task for" — see the note there.
 
-const SYSTEM = `You are the assistant inside "Dad's App", a task tracker for a trading-company owner. You can see his recent messages, his clients, his current tasks, and durable memory (provided below as context). Help him: answer what a client asked for, what's pending or overdue, what he might be forgetting, draft a reply, etc. Be concise and practical. Only use the provided context — if the answer isn't there, say so rather than guessing.
+/**
+ * The chat agent's system prompt.
+ *
+ * Portability notes (was tuned against claude-haiku-4-5):
+ *  - The instruction language is English. Every model here follows English
+ *    instructions and English tool schemas best — that is what function-calling
+ *    training data looks like — while the ANSWER language is set separately by
+ *    replyLanguageInstruction(), so the owner still reads his own language.
+ *  - The "don't assume it didn't happen, go and search" guidance matters more,
+ *    not less, on a smaller model: the failure mode we are guarding against is
+ *    answering "no lo veo" instead of calling search_messages. It is stated
+ *    early, concretely, and again per-tool.
+ */
+function systemPrompt(): string {
+  return `You are the assistant inside "Dad's App", a task tracker for a trading-company owner. You can see his recent messages, his clients, his current tasks, and durable memory (provided below as context). Help him: answer what a client asked for, what's pending or overdue, what he might be forgetting, draft a reply, etc. Be concise and practical. Only use the provided context or what your tools return — if the answer isn't there, say so rather than guessing.
 
-The RECENT MESSAGES below are only a small window (the last 150). The full history has many thousands of messages and every attachment (photos, PDFs) the owner has received or sent. Do NOT assume something didn't happen just because it isn't in that window — use search_messages / find_attachments to look. When the owner refers to a photo, quote, invoice or document, find it and read_attachment it before answering.
+The RECENT MESSAGES below are only a small window (the most recent 150). The full history holds many thousands of messages and every attachment (photos, PDFs) the owner has received or sent. Do NOT conclude that something never happened just because it is missing from that window. Before answering "I don't see it", CALL search_messages. When the owner refers to a photo, quote, invoice or document, call find_attachments and then read_attachment before answering.
 
 Tools you can use:
 - save_memory: when the owner tells you something durable worth remembering across conversations (a lasting preference, a standing instruction, a key fact about a client or his business), save a concise one-sentence fact. Do NOT save ephemeral chatter or things already in the tasks/clients data.
-- create_task: when the owner asks you to create/add a task ("crea una tarea…", "agrégame…"), create it directly. Use a short Spanish title, an optional detail, and the client if he names one. Confirm briefly in your reply.
-- schedule_reminder: when the owner asks to be reminded at a later time ("recuérdame mañana…", "el lunes avísame…"), schedule it. Give due_iso as a local ISO 8601 datetime (e.g. 2026-06-27T09:00:00). If he gives no time of day, default to 09:00. Use CURRENT DATE/TIME below to compute it. Confirm the date/time in your reply.
-- search_messages: search the FULL message history by keyword (and optionally by client) when the answer might be older than the recent window — "what did X ask for", "did anyone mention toallas", "when did we last talk to Y". Prefer this over saying "I don't see it".
-- find_attachments: find files (images, PDFs, documents) the owner received or sent, by filename, contact, chat, or surrounding text. Returns each file's message_id + index so you can read it.
-- read_attachment: actually open and read a specific file (image or PDF) by message_id (from find_attachments) and analyze its contents — quote figures from a cotización/invoice, describe a product photo, etc. Use it whenever the owner asks about the content of a file.
+- create_task: when the owner asks you to create or add a task, create it directly. Use a short title, an optional detail, and the client if he names one. Confirm briefly in your reply.
+- schedule_reminder: when the owner asks to be reminded at a later time, schedule it. Give due_iso as a local ISO 8601 datetime (e.g. 2026-06-27T09:00:00). If he gives no time of day, default to 09:00. Use CURRENT DATE/TIME below to compute it. Confirm the date and time in your reply.
+- search_messages: search the FULL message history by keyword (and optionally by client) when the answer might be older than the recent window — "what did X ask for", "did anyone mention toallas", "when did we last talk to Y". Prefer this over saying you cannot see it.
+- find_attachments: find files (images, PDFs, documents) the owner received or sent, by filename, contact, chat, or surrounding text. Returns each file's message_id and index so you can read it.
+- read_attachment: open and read a specific file (image or PDF) by message_id (from find_attachments) and analyse its contents — quote figures from a quotation or invoice, describe a product photo, and so on. Use it whenever the owner asks about the content of a file.
 
-IMPORTANT: The user is a native Spanish speaker. ALWAYS reply in Spanish (neutral Latin-American Spanish), regardless of the language of the messages or tasks in the context. Keep proper names, product names, and quoted message snippets in their original language.`;
+${replyLanguageInstruction()}`;
+}
 
 const TOOLS: AiTool[] = [
   {
     name: 'save_memory',
     description:
-      'Guarda un dato duradero sobre el usuario, sus clientes, su negocio o sus preferencias para recordarlo en futuras conversaciones. Úsalo solo cuando el usuario comparta algo que valga la pena recordar a largo plazo — no para detalles efímeros ni preguntas puntuales.',
+      'Save a durable fact about the owner, his clients, his business or his preferences, to remember in future conversations. Use only when he shares something worth remembering long term — not for ephemeral details or one-off questions.',
     schema: {
       type: 'object',
       properties: {
-        fact: { type: 'string', description: 'El dato a recordar, en una sola frase concisa.' },
+        fact: { type: 'string', description: 'The fact to remember, as one concise sentence.' },
       },
       required: ['fact'],
     },
@@ -47,13 +64,13 @@ const TOOLS: AiTool[] = [
   {
     name: 'create_task',
     description:
-      'Crea una tarea nueva directamente en la lista (queda en estado "por hacer"). Úsalo cuando el usuario pida explícitamente crear o agregar una tarea.',
+      'Create a new task directly in the list (it lands in the "todo" state). Use when the owner explicitly asks to create or add a task.',
     schema: {
       type: 'object',
       properties: {
-        title: { type: 'string', description: 'Título corto de la tarea, en español.' },
-        detail: { type: 'string', description: 'Detalle o contexto opcional.' },
-        client: { type: 'string', description: 'Nombre del cliente relacionado, si el usuario lo menciona.' },
+        title: { type: 'string', description: "Short task title, in the owner's language." },
+        detail: { type: 'string', description: 'Optional detail or context.' },
+        client: { type: 'string', description: 'Name of the related client, if the owner mentions one.' },
       },
       required: ['title'],
     },
@@ -61,14 +78,14 @@ const TOOLS: AiTool[] = [
   {
     name: 'schedule_reminder',
     description:
-      'Programa un recordatorio único para una fecha/hora futura. Úsalo cuando el usuario pida que le recuerdes algo más tarde.',
+      'Schedule a one-off reminder for a future date and time. Use when the owner asks to be reminded of something later.',
     schema: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Qué recordarle, en español.' },
+        text: { type: 'string', description: "What to remind him of, in the owner's language." },
         due_iso: {
           type: 'string',
-          description: 'Fecha y hora local en ISO 8601, p. ej. 2026-06-27T09:00:00.',
+          description: 'Local date and time in ISO 8601, e.g. 2026-06-27T09:00:00.',
         },
       },
       required: ['text', 'due_iso'],
@@ -77,13 +94,13 @@ const TOOLS: AiTool[] = [
   {
     name: 'search_messages',
     description:
-      'Busca en TODO el historial de mensajes (miles), no solo en los recientes. Úsalo cuando la respuesta pueda estar más atrás en el tiempo. Devuelve los mensajes que coinciden con fecha, remitente y texto.',
+      'Search the ENTIRE message history (thousands of messages), not just the recent window. Use whenever the answer might be further back in time. Returns matching messages with date, sender and text.',
     schema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Palabra(s) o frase a buscar en el texto de los mensajes.' },
-        client: { type: 'string', description: 'Opcional: limita a un cliente/contacto por nombre.' },
-        limit: { type: 'number', description: 'Máximo de resultados (por defecto 20, máximo 40).' },
+        query: { type: 'string', description: 'Word or phrase to search for in message text.' },
+        client: { type: 'string', description: 'Optional: restrict to one client/contact by name.' },
+        limit: { type: 'number', description: 'Maximum results (default 20, maximum 40).' },
       },
       required: ['query'],
     },
@@ -91,12 +108,12 @@ const TOOLS: AiTool[] = [
   {
     name: 'find_attachments',
     description:
-      'Busca archivos (imágenes, PDF, documentos) recibidos o enviados, por nombre de archivo, contacto, chat o texto cercano. Devuelve message_id e index de cada archivo para poder leerlo con read_attachment.',
+      'Find files (images, PDFs, documents) received or sent, by filename, contact, chat or nearby text. Returns each file\'s message_id and index so it can be opened with read_attachment.',
     schema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Nombre de archivo, contacto, chat o palabra relacionada. Vacío = los más recientes.' },
-        limit: { type: 'number', description: 'Máximo de resultados (por defecto 15, máximo 30).' },
+        query: { type: 'string', description: 'Filename, contact, chat or related word. Empty = the most recent files.' },
+        limit: { type: 'number', description: 'Maximum results (default 15, maximum 30).' },
       },
       required: [],
     },
@@ -104,19 +121,25 @@ const TOOLS: AiTool[] = [
   {
     name: 'read_attachment',
     description:
-      'Abre y lee el contenido de un archivo concreto (imagen o PDF) por message_id (obtenido de find_attachments) y lo analiza: transcribe cifras de una cotización/factura, describe una foto de producto, etc.',
+      'Open and read the contents of a specific file (image or PDF) by message_id (from find_attachments) and analyse it: transcribe figures from a quotation or invoice, describe a product photo, and so on.',
     schema: {
       type: 'object',
       properties: {
-        message_id: { type: 'number', description: 'El id del mensaje que contiene el archivo (de find_attachments).' },
-        index: { type: 'number', description: 'Cuál adjunto del mensaje, si hay varios (por defecto 0).' },
+        message_id: { type: 'number', description: 'The id of the message containing the file (from find_attachments).' },
+        index: { type: 'number', description: 'Which attachment of the message, if there are several (default 0).' },
       },
       required: ['message_id'],
     },
   },
 ];
 
-const READ_PROMPT = `Lee este archivo con detalle para el dueño de una empresa comercial. Di qué es y describe su contenido; si es una cotización, factura, orden o lista, transcribe los datos clave (productos, cantidades, precios, fechas, proveedor/cliente). Sé conciso pero no omitas cifras. Responde en español; conserva nombres de productos y marcas tal cual.`;
+function readPrompt(): string {
+  return (
+    `Read this file carefully on behalf of the owner of a trading company. Say what it is and describe its contents. ` +
+    `If it is a quotation, invoice, order or list, transcribe the key data (products, quantities, prices, dates, supplier/client). ` +
+    `Be concise but do not omit figures. ${replyLanguageInstruction()}`
+  );
+}
 
 /** Normalize a possibly-bare stored mime + file path into something vision accepts. */
 function visionMime(mime: string, filePath: string): string {
@@ -126,7 +149,7 @@ function visionMime(mime: string, filePath: string): string {
 }
 
 /** Build a context block from the DB: open tasks, named clients, recent messages, memory. */
-function buildContext(): string {
+export function buildContext(): string {
   const d = db();
   const tasks = d
     .prepare(
@@ -164,12 +187,17 @@ function buildContext(): string {
         .map((c) => `- ${c.name}${c.handle ? ` (${c.handle})` : ''}${c.product_need ? `: ${c.product_need}` : ''}`)
         .join('\n')
     : '(none named yet)';
-  const msgsTxt = recent
-    .map((m) => {
-      const who = m.direction === 'outgoing' ? 'Me' : names[m.sender ?? ''] || m.sender || '?';
-      return `${who}: ${m.body}`;
-    })
-    .join('\n');
+  // clampItem is load-bearing, not defensive garnish: one WhatsApp system
+  // message in the real database carries a 39,748-character base64 JPEG in its
+  // body, which alone is several times the size of this entire block.
+  const msgsTxt = clampBlockKeepingEnd(
+    recent
+      .map((m) => {
+        const who = m.direction === 'outgoing' ? 'Me' : names[m.sender ?? ''] || m.sender || '?';
+        return `${who}: ${clampItem(m.body)}`;
+      })
+      .join('\n'),
+  );
   const memTxt = memories.length ? memories.map((m) => `- ${m.content}`).join('\n') : '(none yet)';
 
   const nowLocal = new Date().toString();
@@ -212,7 +240,7 @@ async function execTool(name: string, input: unknown, threadId: number): Promise
       .map((r) => {
         const who = r.direction === 'outgoing' ? 'Yo' : names[r.sender ?? ''] || r.sender_name || r.sender || '?';
         const when = new Date(r.ts).toLocaleString('es');
-        return `[${when}] ${who}${r.chat_name ? ` (${r.chat_name})` : ''}: ${r.body}`;
+        return `[${when}] ${who}${r.chat_name ? ` (${r.chat_name})` : ''}: ${clampItem(r.body)}`;
       })
       .join('\n');
   }
@@ -285,7 +313,11 @@ async function execTool(name: string, input: unknown, threadId: number): Promise
       }
     }
     if (!filePath) return 'El archivo no está disponible (si es de WhatsApp, la cuenta debe estar conectada).';
-    return describeAttachment(filePath, visionMime(mime, filePath), { prompt: READ_PROMPT, maxTokens: 700 });
+    return describeAttachment(filePath, visionMime(mime, filePath), {
+      prompt: readPrompt(),
+      maxTokens: 700,
+      role: 'chat',
+    });
   }
   if (name === 'save_memory') {
     const fact = (input as { fact?: string })?.fact ?? '';
@@ -345,6 +377,13 @@ export async function runTurn(
   threadId: number,
   userText: string,
   attachments: { name: string }[] = [],
+  /**
+   * Test seam. Production always passes nothing and gets the configured
+   * provider; tests script a provider so the multi-round tool loop — the part
+   * most likely to break on a non-Anthropic model — can be exercised without a
+   * network or an API key.
+   */
+  providerOverride?: AiChatProvider,
 ): Promise<{ reply: string; usedTools: string[] }> {
   addMessage(threadId, 'user', userText, attachments);
 
@@ -356,8 +395,8 @@ export async function runTurn(
       role: m.role,
       content: m.content,
     }));
-  const provider = aiProvider();
-  const system = `${SYSTEM}\n\n--- CONTEXT (from the database) ---\n${buildContext()}`;
+  const provider = providerOverride ?? aiProvider();
+  const system = `${systemPrompt()}\n\n--- CONTEXT (from the database) ---\n${buildContext()}`;
   const usedTools: string[] = [];
   let reply = '';
 

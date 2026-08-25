@@ -4,7 +4,8 @@ import path from 'node:path';
 import { db } from '../db/index.js';
 import { splitAtt } from '../attachments.js';
 import { resolveClientHint } from '../names.js';
-import { SEL_CLOSE, SEL_OPEN } from '../chat/store.js';
+import { SEL_MARKERS } from '../chat/store.js';
+import { clampItem } from '../ai/budget.js';
 import { ModelExtractor } from './extractor.js';
 import { describeAttachment } from './vision.js';
 import type { ClientContext, ExistingTask, IngestedMessage, ProposedTask } from './types.js';
@@ -557,7 +558,11 @@ export function selectionTranscript(ids: number[], resolveName: (handle: string)
     // A body containing the literal selection sentinels would terminate the
     // collapsed block early in the chat UI, spilling the rest of the transcript
     // into the visible bubble. Message bodies are untrusted text; strip them.
-    const body = (r.body || '(sin texto)').replaceAll(SEL_OPEN, '').replaceAll(SEL_CLOSE, '');
+    let stripped = r.body || '(sin texto)';
+    // Strip BOTH the current and legacy sentinels: a body containing either
+    // would terminate the selection block early when replayed to the model.
+    for (const m of SEL_MARKERS) stripped = stripped.replaceAll(m, '');
+    const body = clampItem(stripped);
     return `[${when}] ${who}: ${body}${files}`;
   });
 

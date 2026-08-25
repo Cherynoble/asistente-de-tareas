@@ -3,7 +3,7 @@ import express from 'express';
 import { db } from '../../db/index.js';
 import { config } from '../../config.js';
 import {
-  AI_NOT_CONFIGURED,
+  aiNotConfigured,
   aiName,
   aiProvider,
   aiStatus,
@@ -27,6 +27,7 @@ import {
   cronToTime,
 } from '../../settings.js';
 import { applySchedule } from '../lifecycle.js';
+import { LOCALES, getLocale, isLocale, localeChosen, setLocale } from '../../i18n.js';
 
 export const settingsRouter = express.Router();
 const r = settingsRouter;
@@ -41,6 +42,11 @@ r.get('/api/settings', (_req, res) => {
     dailyTime: cronToTime(expr),
     remindersEnabled: remindersEnabled(),
     nudgeIntervalDays: nudgeIntervalDays(),
+    uiLanguage: getLocale(),
+    /** Which languages the picker offers. */
+    languages: LOCALES,
+    /** False until the owner picks one — drives the first-run language prompt. */
+    languageChosen: localeChosen(),
   });
 });
 
@@ -53,7 +59,17 @@ r.post('/api/settings', (req, res) => {
     selectedChats?: string[];
     remindersEnabled?: boolean;
     nudgeIntervalDays?: number;
+    uiLanguage?: string;
   };
+  // Changing the language re-renders the whole UI and re-points every AI
+  // prompt, so the client reloads after this returns.
+  if (typeof b.uiLanguage === 'string') {
+    if (!isLocale(b.uiLanguage)) {
+      res.status(400).json({ error: `Unknown language: ${b.uiLanguage}` });
+      return;
+    }
+    setLocale(b.uiLanguage);
+  }
   if (typeof b.apiKey === 'string') setSetting('anthropic_api_key', b.apiKey.trim());
   if (typeof b.remindersEnabled === 'boolean')
     setSetting('reminders_enabled', b.remindersEnabled ? '1' : '0');
@@ -98,7 +114,7 @@ r.post('/api/ai', (req, res) => {
  *  caught in Ajustes, not discovered by a silently-failing nightly cron. */
 r.post('/api/ai/test', async (_req, res) => {
   if (!hasAiKey()) {
-    res.status(400).json({ ok: false, error: AI_NOT_CONFIGURED });
+    res.status(400).json({ ok: false, error: aiNotConfigured });
     return;
   }
   try {

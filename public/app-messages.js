@@ -27,10 +27,10 @@ let msgLastPicked = null; // index in msgRows, for shift-click ranges
 let msgFilters = { find: '', unproc: false, files: false };
 let msgHits = []; // global search results, shown above the chat list
 
-const msgDayKey = (ms) => new Date(ms).toLocaleDateString('es-CL');
+const msgDayKey = (ms) => fmtDayKey(ms);
 const msgDayLabel = (ms) =>
-  new Date(ms).toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-const msgTime = (ms) => new Date(ms).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+  fmtDayLong(ms);
+const msgTime = (ms) => new Date(ms).toLocaleTimeString(I18N_BCP47, { hour: '2-digit', minute: '2-digit' });
 
 /** Short relative-ish stamp for the chat list: time today, date otherwise. */
 function msgWhen(ms) {
@@ -38,11 +38,11 @@ function msgWhen(ms) {
   const d = new Date(ms);
   return msgDayKey(ms) === msgDayKey(Date.now())
     ? msgTime(ms)
-    : d.toLocaleDateString('es', { day: '2-digit', month: '2-digit', year: '2-digit' });
+    : fmtShortDate(ms);
 }
 
 function msgChatLabel(c) {
-  return c.displayName || 'Sin nombre';
+  return c.displayName || tr('messages.noName');
 }
 
 // ---- sidebar ----
@@ -76,7 +76,7 @@ function renderMsgSide() {
 
   let html = '';
   if (msgHits.length) {
-    html += `<div class="msg-sec">Mensajes que coinciden (${msgHits.length})</div>`;
+    html += `<div class="msg-sec">${esc(tr('messages.matching', { n: msgHits.length }))}</div>`;
     html += msgHits
       .map(
         (h) => `<button class="msg-hit" data-hit="${h.id}">
@@ -86,13 +86,13 @@ function renderMsgSide() {
         </button>`,
       )
       .join('');
-    html += `<div class="msg-sec">Conversaciones (${shown.length})</div>`;
+    html += `<div class="msg-sec">${esc(tr('messages.conversations', { n: shown.length }))}</div>`;
   }
 
   html += shown.length
     ? shown
         .map((c) => {
-          const preview = (c.lastDirection === 'outgoing' ? 'Yo: ' : '') + (c.lastBody || '(archivo)');
+          const preview = (c.lastDirection === 'outgoing' ? tr('messages.mePrefix') : '') + (c.lastBody || tr('messages.fileFallback'));
           return `<button class="msg-chat${c.chatId === msgChatId ? ' active' : ''}" data-chat="${esc(c.chatId)}">
             <span class="msg-chat-top">
               <span class="msg-chat-name">${esc(msgChatLabel(c))}</span>
@@ -101,14 +101,14 @@ function renderMsgSide() {
             <span class="msg-chat-prev">${sourceBadge(c.source)}${accountBadge(c.source, c.waAccount)}${esc(preview.slice(0, 90))}</span>
             <span class="msg-chat-counts">
               <span>${c.total} msj</span>
-              ${c.unprocessed ? `<span class="msg-warn">${c.unprocessed} sin procesar</span>` : ''}
-              ${c.withAttachments ? `<span>${c.withAttachments} adj.</span>` : ''}
-              ${c.included ? '' : '<span class="msg-excl">no se importa</span>'}
+              ${c.unprocessed ? `<span class="msg-warn">${esc(tr('messages.nUnprocessed', { n: c.unprocessed }))}</span>` : ''}
+              ${c.withAttachments ? `<span>${esc(tr('messages.nAttachments', { n: c.withAttachments }))}</span>` : ''}
+              ${c.included ? '' : `<span class="msg-excl">${esc(tr('messages.notImported'))}</span>`}
             </span>
           </button>`;
         })
         .join('')
-    : `<div class="msg-empty">Ninguna conversación coincide.</div>`;
+    : `<div class="msg-empty">${esc(tr('messages.noChatMatch'))}</div>`;
 
   box.innerHTML = html;
   box.querySelectorAll('.msg-chat').forEach((b) => {
@@ -147,7 +147,7 @@ async function openMsgChat(chatId, anchorTs) {
   msgRows = [];
   msgLastPicked = null;
   const chat = msgChats.find((c) => c.chatId === chatId);
-  $('#msg-title').textContent = chat ? msgChatLabel(chat) : 'Conversación';
+  $('#msg-title').textContent = chat ? msgChatLabel(chat) : tr('messages.conversation');
   $('#msg-tools').hidden = false;
   renderMsgSide();
 
@@ -155,7 +155,7 @@ async function openMsgChat(chatId, anchorTs) {
     ? msgQuery({ dir: 'around', cursorTs: String(anchorTs), cursorId: '0' })
     : msgQuery({});
   msgLoading = true;
-  $('#msg-thread').innerHTML = `<div class="msg-empty">Cargando…</div>`;
+  $('#msg-thread').innerHTML = `<div class="msg-empty">${esc(tr('common.loading'))}</div>`;
   try {
     const r = await (await fetch(url)).json();
     msgRows = r.messages || [];
@@ -166,7 +166,7 @@ async function openMsgChat(chatId, anchorTs) {
     renderMsgSelection();
   } catch (err) {
     // Without this a failed fetch leaves "Cargando…" on screen forever.
-    $('#msg-thread').innerHTML = `<div class="msg-empty">No se pudo cargar la conversación. ${esc(String(err))}</div>`;
+    $('#msg-thread').innerHTML = `<div class="msg-empty">${esc(tr('messages.loadFailed'))} ${esc(String(err))}</div>`;
   } finally {
     msgLoading = false;
   }
@@ -175,9 +175,9 @@ async function openMsgChat(chatId, anchorTs) {
 function renderMsgStats(s) {
   if (!s) return;
   $('#msg-stats').innerHTML =
-    `<span>${s.total} mensajes</span>` +
-    `<span class="${s.unprocessed ? 'msg-warn' : ''}">${s.unprocessed || 0} sin procesar</span>` +
-    `<span>${s.withAttachments || 0} con adjuntos</span>`;
+    `<span>${esc(tr('messages.nMessages', { n: s.total }))}</span>` +
+    `<span class="${s.unprocessed ? 'msg-warn' : ''}">${esc(tr('messages.nUnprocessed', { n: s.unprocessed || 0 }))}</span>` +
+    `<span>${esc(tr('messages.nWithAttachments', { n: s.withAttachments || 0 }))}</span>`;
 }
 
 /** Load the next page in one direction and splice it onto the loaded window. */
@@ -218,7 +218,7 @@ function msgAttHtml(m) {
       .map((a, i) => {
         const src = `/api/attachment?id=${a.id}&i=${a.i}`;
         const st = a.state || (a.hasFile ? 'ok' : a.source === 'whatsapp' ? 'fetch' : 'missing');
-        const label = esc(a.filename || a.category || 'archivo');
+        const label = esc(a.filename || a.category || tr('att.file'));
         let inner;
         if (st === 'ok' && a.category === 'image')
           inner = `<img loading="lazy" src="${src}" alt="${label}" />`;
@@ -243,16 +243,16 @@ function msgRowHtml(m, showWho) {
   const picked = msgSel.has(m.id);
   const who = out ? '' : displayName(m.sender) || m.senderName || prettySender(m.sender, m.senderName);
   return `<div class="msg-row ${out ? 'out' : 'in'}${picked ? ' picked' : ''}" data-id="${m.id}">
-    <input class="msg-pick" type="checkbox" ${picked ? 'checked' : ''} aria-label="Seleccionar mensaje" />
+    <input class="msg-pick" type="checkbox" ${picked ? 'checked' : ''} aria-label="${esc(tr('messages.selectMessage'))}" />
     <div class="msg-bubble">
       ${showWho && who ? `<div class="msg-who">${esc(who)}</div>` : ''}
       ${msgAttHtml(m)}
       ${m.body ? `<div class="msg-text">${esc(m.body)}</div>` : ''}
       <div class="msg-meta">
         <span>${esc(msgTime(m.ts))}</span>
-        ${m.processed ? '' : '<span class="msg-flag warn">sin procesar</span>'}
-        ${m.tasks.length ? `<span class="msg-flag ok">${m.tasks.length} tarea${m.tasks.length > 1 ? 's' : ''}</span>` : ''}
-        <button class="msg-info" title="Detalles técnicos" aria-label="Detalles técnicos">${ico('diag')}</button>
+        ${m.processed ? '' : `<span class="msg-flag warn">${esc(tr('messages.unprocessed'))}</span>`}
+        ${m.tasks.length ? `<span class="msg-flag ok">${esc(trn('messages.nTasks', m.tasks.length))}</span>` : ''}
+        <button class="msg-info" title="${esc(tr('messages.technicalDetails'))}" aria-label="${esc(tr('messages.technicalDetails'))}">${ico('diag')}</button>
       </div>
     </div>
   </div>`;
@@ -263,13 +263,13 @@ function renderMsgThread(scroll) {
   if (!msgRows.length) {
     box.innerHTML = `<div class="msg-empty">${
       msgFilters.find || msgFilters.unproc || msgFilters.files
-        ? 'Ningún mensaje coincide con los filtros.'
-        : 'Esta conversación no tiene mensajes guardados.'
+        ? tr('messages.noMessageMatch')
+        : tr('messages.emptyConversation')
     }</div>`;
     return;
   }
 
-  let html = msgHasOlder ? `<div class="msg-more">Desplázate para cargar mensajes anteriores…</div>` : '';
+  let html = msgHasOlder ? `<div class="msg-more">${esc(tr('messages.scrollOlder'))}</div>` : '';
   let day = '';
   let prevSender = null;
   for (const m of msgRows) {
@@ -277,13 +277,13 @@ function renderMsgThread(scroll) {
     if (k !== day) {
       day = k;
       prevSender = null;
-      html += `<button class="msg-day" data-day="${esc(k)}" title="Seleccionar todo este día">${esc(msgDayLabel(m.ts))}</button>`;
+      html += `<button class="msg-day" data-day="${esc(k)}" title="${esc(tr('messages.selectWholeDay'))}">${esc(msgDayLabel(m.ts))}</button>`;
     }
     // Only label the first message of a run from the same person.
     html += msgRowHtml(m, m.sender !== prevSender);
     prevSender = m.sender;
   }
-  if (msgHasNewer) html += `<div class="msg-more">Desplázate para cargar mensajes posteriores…</div>`;
+  if (msgHasNewer) html += `<div class="msg-more">${esc(tr('messages.scrollNewer'))}</div>`;
   box.innerHTML = html;
   wireMsgThread();
 
@@ -384,10 +384,10 @@ function renderMsgSelection() {
     .filter((m) => msgSel.has(m.id))
     .reduce((sum, m) => sum + m.attachments.filter((a) => a.category === 'image' || a.category === 'pdf').length, 0);
   $('#msg-selcount').textContent =
-    `${n} seleccionado${n > 1 ? 's' : ''}${n >= MSG_MAX_SEL ? ` (máx. ${MSG_MAX_SEL})` : ''}`;
+    trn('messages.nSelected', n) + (n >= MSG_MAX_SEL ? ` ${tr('messages.maxSel', { max: MSG_MAX_SEL })}` : '');
   const opt = $('#msg-visopt');
   opt.hidden = files === 0;
-  $('#msg-vislabel').textContent = `analizar ${files} archivo${files > 1 ? 's' : ''}`;
+  $('#msg-vislabel').textContent = trn('messages.analyzeNFiles', files);
 }
 
 function clearMsgSelection() {
@@ -401,18 +401,18 @@ function showMsgDetails(id) {
   const m = msgRows.find((x) => x.id === id);
   if (!m) return;
   const rows = [
-    ['id interno', m.id],
-    ['id de origen', m.sourceMsgId],
-    ['fuente', m.source + (m.waAccount ? ` (${m.waAccount})` : '')],
-    ['conversación', m.chatId || '—'],
-    ['remitente', m.sender || '—'],
-    ['fecha', new Date(m.ts).toLocaleString('es')],
-    ['analizado por la IA', m.processed ? 'sí' : 'no'],
-    ['adjuntos', m.attachments.length ? m.attachments.map((a) => `${a.filename || a.category} (${a.state})`).join(', ') : 'ninguno'],
-    ['tareas generadas', m.tasks.length ? m.tasks.map((t) => `#${t.id} ${t.title}`).join(' · ') : 'ninguna'],
+    [tr('detail.internalId'), m.id],
+    [tr('detail.sourceId'), m.sourceMsgId],
+    [tr('detail.source'), m.source + (m.waAccount ? ` (${m.waAccount})` : '')],
+    [tr('detail.conversation'), m.chatId || '—'],
+    [tr('detail.sender'), m.sender || '—'],
+    [tr('detail.date'), fmtDateTime(m.ts)],
+    [tr('detail.analyzedByAi'), m.processed ? tr('common.yes') : tr('common.no')],
+    [tr('detail.attachments'), m.attachments.length ? m.attachments.map((a) => `${a.filename || a.category} (${a.state})`).join(', ') : tr('common.none')],
+    [tr('detail.generatedTasks'), m.tasks.length ? m.tasks.map((t) => `#${t.id} ${t.title}`).join(' · ') : tr('common.noneF')],
   ];
   msgModal(
-    'Detalles del mensaje',
+    tr('messages.messageDetails'),
     `<table class="msg-detail">${rows
       .map(([k, v]) => `<tr><th>${esc(String(k))}</th><td>${esc(String(v))}</td></tr>`)
       .join('')}</table>`,
@@ -424,7 +424,7 @@ function msgModal(title, bodyHtml) {
   const ov = el(`<div class="overlay askmodal" style="display:flex;">
     <div class="modal msg-modal">
       <div class="mem-head"><strong>${esc(title)}</strong>
-        <button class="msg-modal-x" aria-label="Cerrar">${ico('close')}</button></div>
+        <button class="msg-modal-x" aria-label="${esc(tr('common.close'))}">${ico('close')}</button></div>
       <div class="msg-modal-body">${bodyHtml}</div>
       <div class="modal-actions"><button class="primary msg-modal-ok">Cerrar</button></div>
     </div>
@@ -447,7 +447,7 @@ async function msgAnalyze() {
   const btn = $('#msg-analyze');
   btn.disabled = true;
   const was = btn.innerHTML;
-  btn.innerHTML = 'Analizando…';
+  btn.innerHTML = esc(tr('messages.analyzing'));
   try {
     const r = await (
       await fetch('/api/messages/reanalyze', {
@@ -458,13 +458,13 @@ async function msgAnalyze() {
     ).json();
 
     if (r.error) {
-      msgModal('No se pudo analizar', `<p class="hint">${esc(r.error)}</p>`);
+      msgModal(tr('messages.analyzeFailed'), `<p class="hint">${esc(r.error)}</p>`);
       return;
     }
 
-    const head = `<p class="hint">${r.messages} mensaje${r.messages > 1 ? 's' : ''} analizado${
-      r.messages > 1 ? 's' : ''
-    }${r.filesAnalyzed ? `, ${r.filesAnalyzed} archivo${r.filesAnalyzed > 1 ? 's' : ''} leído${r.filesAnalyzed > 1 ? 's' : ''}` : ''}.</p>`;
+    const head =
+      `<p class="hint">${esc(trn('messages.nAnalyzed', r.messages))}` +
+      `${r.filesAnalyzed ? esc(', ' + trn('messages.nFilesRead', r.filesAnalyzed)) : ''}.</p>`;
 
     // Proposals the server refused because their twin already exists — the
     // deterministic dedup that keeps a repeated "Analizar" from re-creating
@@ -480,9 +480,7 @@ async function msgAnalyze() {
     if (r.proposed.length) {
       body =
         head +
-        `<p><b>${r.proposed.length} tarea${r.proposed.length > 1 ? 's' : ''} nueva${
-          r.proposed.length > 1 ? 's' : ''
-        }</b>, ya en la Bandeja:</p><ul class="msg-proposed">` +
+        `<p><b>${esc(trn('messages.nNewTasks', r.proposed.length))}</b>${esc(tr('messages.alreadyInInbox'))}</p><ul class="msg-proposed">` +
         r.proposed
           .map(
             (t) =>
@@ -493,34 +491,34 @@ async function msgAnalyze() {
           .join('') +
         `</ul>` +
         (dups.length
-          ? `<p class="hint">Omitida${dups.length > 1 ? 's' : ''} por duplicado (ya existe${dups.length > 1 ? 'n' : ''}):</p>` + dupList
+          ? `<p class="hint">${esc(trn('messages.skippedDuplicates', dups.length))}</p>` + dupList
           : '');
     } else if (dups.length) {
       // The model proposed something, but each proposal already exists — say
       // exactly which, so a repeat analysis reads as confirmation, not failure.
       body =
         head +
-        `<p>No se creó ninguna tarea nueva: lo que piden estos mensajes <b>ya existe</b>:</p>` +
+        `<p>${esc(tr('messages.noNewTasksExisting'))}</p>` +
         dupList;
     } else {
       // A zero here almost always means "already covered", not "nothing found":
       // the extractor is given the open tasks and told not to duplicate them.
       body =
         head +
-        `<p>No se propuso ninguna tarea nueva. Normalmente es porque lo que piden estos mensajes ya está cubierto por una tarea abierta.</p>` +
+        `<p>${esc(tr('messages.noNewTasksCovered'))}</p>` +
         (r.related.length
-          ? `<p class="hint">Tareas abiertas relacionadas con esta conversación:</p><ul class="msg-proposed">` +
+          ? `<p class="hint">${esc(tr('messages.relatedOpenTasks'))}</p><ul class="msg-proposed">` +
             r.related.map((t) => `<li><b>${esc(t.title)}</b> <span class="msg-flag">${esc(statusLabel(t.status))}</span></li>`).join('') +
             `</ul>`
           : '');
     }
-    msgModal('Resultado del análisis', body);
+    msgModal(tr('messages.analysisResult'), body);
     if (r.proposed.length) {
       loadInbox();
       loadStats();
     }
   } catch (err) {
-    msgModal('No se pudo analizar', `<p class="hint">${esc(String(err))}</p>`);
+    msgModal(tr('messages.analyzeFailed'), `<p class="hint">${esc(String(err))}</p>`);
   } finally {
     btn.disabled = false;
     btn.innerHTML = was;
@@ -545,13 +543,13 @@ async function msgToChat() {
       })
     ).json();
   } catch (err) {
-    msgModal('No se pudo enviar al chat', `<p class="hint">${esc(String(err))}</p>`);
+    msgModal(tr('messages.sendToChatFailed'), `<p class="hint">${esc(String(err))}</p>`);
     return;
   } finally {
     btn.disabled = false;
   }
   if (r.error) {
-    msgModal('No se pudo enviar al chat', `<p class="hint">${esc(r.error)}</p>`);
+    msgModal(tr('messages.sendToChatFailed'), `<p class="hint">${esc(r.error)}</p>`);
     return;
   }
 

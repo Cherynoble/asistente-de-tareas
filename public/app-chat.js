@@ -13,25 +13,46 @@ let chatInited = false;
 // the message content because that is what gets replayed to the model, so here
 // it is folded into a <details> instead of flooding the bubble: visible when you
 // want to check what the assistant was given, out of the way otherwise.
-const SEL_OPEN = '⟦SELECCIÓN⟧';
-const SEL_CLOSE = '⟦/SELECCIÓN⟧';
+//
+// These are a WIRE FORMAT, not UI text — never translate them, and never change
+// the legacy pair. The Spanish literals are already stored inside chat_messages
+// rows in every existing database; renaming them would silently break the
+// rendering of every thread that has a selection in it. So: WRITE the neutral
+// pair from now on, READ both forever. No migration, no risk.
+const SEL_OPEN = '⟦SELECTION⟧';
+const SEL_CLOSE = '⟦/SELECTION⟧';
+const SEL_OPEN_LEGACY = '⟦SELECCIÓN⟧';
+const SEL_CLOSE_LEGACY = '⟦/SELECCIÓN⟧';
+
+/** Locate the selection block, accepting either the neutral or legacy pair. */
+function findSelectionBlock(raw) {
+  for (const [o, c] of [
+    [SEL_OPEN, SEL_CLOSE],
+    [SEL_OPEN_LEGACY, SEL_CLOSE_LEGACY],
+  ]) {
+    const open = raw.indexOf(o);
+    const close = raw.indexOf(c);
+    if (open !== -1 && close > open) return { open, close, openLen: o.length, closeLen: c.length };
+  }
+  return null;
+}
 
 function bubble(role, text, attachments) {
   const atts = (attachments || []).map((a) => `<span class="att">${ico('clip')}${esc(a.name)}</span>`).join('');
   const raw = text ?? '';
   let quoted = '';
   let rest = raw;
-  const open = raw.indexOf(SEL_OPEN);
-  const close = raw.indexOf(SEL_CLOSE);
-  if (open !== -1 && close > open) {
-    const inner = raw.slice(open + SEL_OPEN.length, close).trim();
+  const found = findSelectionBlock(raw);
+  if (found) {
+    const { open, close, openLen, closeLen } = found;
+    const inner = raw.slice(open + openLen, close).trim();
     const nl = inner.indexOf('\n');
     const header = nl === -1 ? inner : inner.slice(0, nl);
     const body = nl === -1 ? '' : inner.slice(nl + 1);
     quoted =
       `<details class="sel-quote"><summary>${ico('message')}${esc(header)}</summary>` +
       `<pre>${esc(body)}</pre></details>`;
-    rest = (raw.slice(0, open) + raw.slice(close + SEL_CLOSE.length)).trim();
+    rest = (raw.slice(0, open) + raw.slice(close + closeLen)).trim();
   }
   return el(
     `<div class="bubble ${role === 'user' ? 'user' : 'bot'}">${atts}${quoted}${esc(rest)}</div>`,
@@ -45,12 +66,12 @@ async function loadThreads() {
   for (const t of threads) {
     const item = el(`<div class="thread-item ${t.id === currentThreadId ? 'active' : ''}">
       <span class="tt">${esc(t.title)}</span>
-      <button class="del-thread" title="Eliminar conversación" aria-label="Eliminar conversación">${ico('trash')}</button>
+      <button class="del-thread" title="${esc(tr('chat.deleteThread'))}" aria-label="${esc(tr('chat.deleteThread'))}">${ico('trash')}</button>
     </div>`);
     item.querySelector('.tt').onclick = () => openThread(t.id);
     item.querySelector('.del-thread').onclick = async (e) => {
       e.stopPropagation();
-      if (!confirm('¿Eliminar esta conversación?')) return;
+      if (!confirm(tr('chat.confirmDeleteThread'))) return;
       await fetch(`/api/threads/${t.id}`, { method: 'DELETE' });
       if (currentThreadId === t.id) newThread();
       await loadThreads();
@@ -79,7 +100,7 @@ function newThread() {
   showChatView();
   const log = $('#chat-log');
   log.innerHTML = '';
-  log.append(el(`<div class="empty">${ico('chat', 'ico-xl')}Nueva conversación. Pregúntame sobre tus mensajes, clientes o tareas.</div>`));
+  log.append(el(`<div class="empty">${ico('chat', 'ico-xl')}${esc(tr('chat.emptyThread'))}</div>`));
   document.querySelectorAll('.thread-item').forEach((i) => i.classList.remove('active'));
   $('#chat-input').focus();
 }
@@ -117,7 +138,7 @@ $('#chat-file').addEventListener('change', (e) => {
   selectedFile = f;
   const chip = $('#chat-file-chip');
   chip.hidden = false;
-  chip.innerHTML = `${ico('clip')}${esc(f.name)} <button title="quitar" aria-label="Quitar archivo">${ico('close')}</button>`;
+  chip.innerHTML = `${ico('clip')}${esc(f.name)} <button title="${esc(tr('att.remove'))}" aria-label="${esc(tr('chat.removeFile'))}">${ico('close')}</button>`;
   chip.querySelector('button').onclick = clearFile;
 });
 function fileToBase64(file) {
@@ -146,9 +167,9 @@ function renderPendingSelection() {
   chip.hidden = false;
   chip.innerHTML =
     `<details class="sel-quote"><summary>${ico('message')}${esc(pendingSelection.label)}` +
-    ` <span class="sel-hint">se enviará con tu pregunta</span></summary>` +
+    ` <span class="sel-hint">${esc(tr('chat.selectionHint'))}</span></summary>` +
     `<pre>${esc(pendingSelection.preview)}</pre></details>` +
-    `<button class="sel-drop" title="Quitar la selección" aria-label="Quitar la selección">${ico('close')}</button>`;
+    `<button class="sel-drop" title="${esc(tr('chat.dropSelection'))}" aria-label="${esc(tr('chat.dropSelection'))}">${ico('close')}</button>`;
   chip.querySelector('.sel-drop').onclick = clearPendingSelection;
 }
 
@@ -173,7 +194,7 @@ $('#chat-form').addEventListener('submit', async (e) => {
       file ? [{ name: file.name }] : [],
     ),
   );
-  const thinking = el(`<div class="bubble bot thinking">${file ? 'analizando archivo…' : 'pensando…'}</div>`);
+  const thinking = el(`<div class="bubble bot thinking">${esc(file ? tr('chat.analyzingFile') : tr('chat.thinking'))}</div>`);
   log.append(thinking);
   log.scrollTop = log.scrollHeight;
   try {
@@ -209,12 +230,12 @@ $('#chat-form').addEventListener('submit', async (e) => {
     }
     thinking.remove();
     if (r.threadId) currentThreadId = r.threadId;
-    log.append(bubble('bot', r.reply || `(error: ${r.error || 'sin respuesta'})`));
+    log.append(bubble('bot', r.reply || `(${tr('common.errorPrefix', { message: r.error || tr('chat.noReply') })})`));
     handleChatTools(r, log);
     if (r.createdThread) await loadThreads();
   } catch (err) {
     thinking.remove();
-    log.append(bubble('bot', `(error: ${String(err)})`));
+    log.append(bubble('bot', `(${tr('common.errorPrefix', { message: String(err) })})`));
   }
   log.scrollTop = log.scrollHeight;
 });
@@ -222,14 +243,14 @@ $('#chat-form').addEventListener('submit', async (e) => {
 function handleChatTools(r, log) {
   const note = (t) => log.append(el(`<div class="empty" style="padding:6px">${t}</div>`));
   const used = r.usedTools || [];
-  if (used.includes('save_memory')) { note(ico('memory') + ' guardé algo en la memoria'); loadMemory(); }
+  if (used.includes('save_memory')) { note(ico('memory') + ' ' + esc(tr('chat.savedMemory'))); loadMemory(); }
   if (used.includes('create_task')) {
-    note(ico('check') + ' creé una tarea en «Por hacer»');
+    note(ico('check') + ' ' + esc(tr('chat.createdTask')));
     loadInbox();
     loadTasks();
     loadStats();
   }
-  if (used.includes('schedule_reminder')) { note(ico('clock') + ' programé un recordatorio'); loadReminders(); }
+  if (used.includes('schedule_reminder')) { note(ico('clock') + ' ' + esc(tr('chat.scheduledReminder'))); loadReminders(); }
 }
 
 // ---- Scheduled reminders (chat subtab) ----
@@ -239,15 +260,15 @@ async function loadReminders() {
   const list = $('#reminders-list');
   list.innerHTML = '';
   if (!rs.length) {
-    list.append(el(`<div class="empty">${ico('clock', 'ico-xl')}No hay recordatorios. Pídele al asistente «recuérdame mañana…».</div>`));
+    list.append(el(`<div class="empty">${ico('clock', 'ico-xl')}${esc(tr('chat.noReminders'))}</div>`));
     return;
   }
   for (const r of rs) {
     const overdue = r.dueAt < Date.now();
-    const when = new Date(r.dueAt).toLocaleString('es');
+    const when = fmtDateTime(r.dueAt);
     const card = el(`<div class="card mem-item">
       <span class="mc"><b>${esc(r.text)}</b><br><span class="${overdue ? 'overdue-when' : 'muted'}" style="font-size:12px">${overdue ? ico('warn') + ' ' : ''}${esc(when)}</span></span>
-      <button class="dismiss iconbtn" title="Cancelar" aria-label="Cancelar recordatorio">${ico('trash')}</button>
+      <button class="dismiss iconbtn" title="${esc(tr('common.cancel'))}" aria-label="${esc(tr('chat.cancelReminder'))}">${ico('trash')}</button>
     </div>`);
     card.querySelector('.dismiss').onclick = async () => {
       await fetch(`/api/agenda/${r.id}`, { method: 'DELETE' });
@@ -284,20 +305,20 @@ async function checkDigest() {
     const body = $('#digest-body');
     body.innerHTML = '';
     if (reminders.length) {
-      const sec = el(`<div class="dsec"><h4>${ico('clock')}Recordatorios</h4></div>`);
+      const sec = el(`<div class="dsec"><h4>${ico('clock')}${esc(tr('chat.recordatorios'))}</h4></div>`);
       for (const r of reminders)
-        sec.append(el(`<div class="ditem"><div class="dt">${esc(r.text)}</div><div class="dd">${esc(new Date(r.dueAt).toLocaleString('es'))}</div></div>`));
+        sec.append(el(`<div class="ditem"><div class="dt">${esc(r.text)}</div><div class="dd">${esc(fmtDateTime(r.dueAt))}</div></div>`));
       body.append(sec);
     }
     if (newTasks.length) {
-      const sec = el(`<div class="dsec"><h4>${ico('new')}Tareas propuestas nuevas <span class="dg-count">(${newTasks.length})</span></h4></div>`);
+      const sec = el(`<div class="dsec"><h4>${ico('new')}${esc(tr('digest.newTasks'))} <span class="dg-count">(${newTasks.length})</span></h4></div>`);
       for (const t of newTasks) {
         const item = el(`<div class="ditem ditem-task">
           <div class="dt">${esc(t.title)}</div>
-          ${t.clientHint ? `<div class="dd">cliente: ${esc(displayName(t.clientHint))}</div>` : ''}
+          ${t.clientHint ? `<div class="dd">${esc(tr('tasks.clientLabel', { who: displayName(t.clientHint) }))}</div>` : ''}
           <div class="dactions">
-            <button class="approve j-dg-approve">${ico('check')}Aprobar</button>
-            <button class="dismiss j-dg-dismiss">${ico('trash')}Descartar</button>
+            <button class="approve j-dg-approve">${ico('check')}${esc(tr('inbox.approve'))}</button>
+            <button class="dismiss j-dg-dismiss">${ico('trash')}${esc(tr('digest.dismiss'))}</button>
           </div>
         </div>`);
         const settle = (label) => {
@@ -311,12 +332,12 @@ async function checkDigest() {
         item.querySelector('.j-dg-approve').onclick = async (e) => {
           e.target.disabled = true;
           await setStatus(t.id, 'todo'); // → Tareas (existing endpoint)
-          settle(ico('check') + ' Aprobada');
+          settle(ico('check') + ' ' + esc(tr('digest.approved')));
         };
         item.querySelector('.j-dg-dismiss').onclick = async (e) => {
           e.target.disabled = true;
           await deleteTask(t.id); // → Papelera (existing bulk-delete)
-          settle(ico('trash') + ' Descartada');
+          settle(ico('trash') + ' ' + esc(tr('digest.dismissed')));
         };
         sec.append(item);
       }
@@ -324,7 +345,7 @@ async function checkDigest() {
     }
     if (!hasContent) {
       body.append(
-        el(`<div class="dsec"><div class="ditem ditem-clear"><div class="dt">${ico('check')}Todo al día</div><div class="dd">No hay tareas nuevas ni recordatorios pendientes. Que tengas un buen día.</div></div></div>`),
+        el(`<div class="dsec"><div class="ditem ditem-clear"><div class="dt">${ico('check')}${esc(tr('digest.allClear'))}</div><div class="dd">${esc(tr('digest.allClearBody'))}</div></div></div>`),
       );
     }
     const ov = $('#digest-overlay');
@@ -349,13 +370,13 @@ async function loadMemory() {
   const list = $('#memory-list');
   list.innerHTML = '';
   if (!mems.length) {
-    list.append(el(`<div class="empty">${ico('memory', 'ico-xl')}El asistente aún no ha guardado nada. Cuéntale algo que deba recordar.</div>`));
+    list.append(el(`<div class="empty">${ico('memory', 'ico-xl')}${esc(tr('chat.noMemories'))}</div>`));
     return;
   }
   for (const m of mems) {
     const card = el(`<div class="card mem-item">
       <span class="mc">${esc(m.content)}</span>
-      <button class="dismiss iconbtn" title="Olvidar" aria-label="Olvidar este dato">${ico('trash')}</button>
+      <button class="dismiss iconbtn" title="${esc(tr('chat.forget'))}" aria-label="${esc(tr('chat.forgetThis'))}">${ico('trash')}</button>
     </div>`);
     card.querySelector('.dismiss').onclick = async () => {
       await fetch(`/api/memory/${m.id}`, { method: 'DELETE' });

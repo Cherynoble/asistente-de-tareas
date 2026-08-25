@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { extractJson, withRetry, AiHttpError } from '../src/ai/types.js';
-import { OpenAiCompatProvider } from '../src/ai/openai.js';
+import { clampItem, clampBlockKeepingEnd, MAX_ITEM_CHARS } from '../src/ai/budget.js';
+
+// Short timeout so the "provider never answers" test finishes fast. Must be set
+// BEFORE the adapter module evaluates, hence the dynamic import.
+process.env.AI_TIMEOUT_MS = '400';
+const { OpenAiCompatProvider } = await import('../src/ai/openai.js');
 
 // ---- extractJson: tolerate the ways JSON-mode providers decorate output ----
 
@@ -181,4 +186,98 @@ test('adapter sends images as data URIs when the model has vision', async () => 
   } finally {
     m.close();
   }
+});
+
+// ---- JSON mode: the keyword requirement is deliberate, not incidental ----
+
+test('adapter includes the literal word "json" in the system prompt', async () => {
+  const m = await mockServer({ choices: [{ finish_reason: 'stop', message: { content: '{}' } }] });
+  try {
+    await provider(m.url).chat({
+      maxTokens: 50,
+      jsonSchema: { type: 'object' },
+      messages: [{ role: 'user', content: 'go' }],
+    });
+    const sys = String(m.captured[0]!.body.messages[0]!.content);
+    // DeepSeek (and OpenAI) reject response_format:json_object unless the word
+    // appears in the prompt. Losing it would 400 every extraction run.
+    assert.match(sys, /\bjson\b/i);
+  } finally {
+    m.close();
+  }
+});
+
+// ---- assistant tool-call messages must not use null content ----
+
+test('adapter sends "" not null for an assistant message carrying tool_calls', async () => {
+  const m = await mockServer({ choices: [{ finish_reason: 'stop', message: { content: 'ok' } }] });
+  try {
+    await provider(m.url).chat({
+      maxTokens: 50,
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'a1', name: 't', input: {} }] },
+        { role: 'tool', toolCallId: 'a1', content: 'done' },
+      ],
+    });
+    const asst = m.captured[0]!.body.messages.find((x) => x.role === 'assistant')!;
+    assert.notEqual(asst.content, null, 'several OpenAI-compatible backends 400 on null content');
+    assert.equal(asst.content, '');
+  } finally {
+    m.close();
+  }
+});
+
+// ---- timeouts: a provider that accepts and never answers ----
+
+test('adapter gives up on a provider that never responds', async () => {
+  const sockets: import('node:net').Socket[] = [];
+  const srv = http.createServer(() => {
+    /* accept, never reply — the wedged-connection failure mode */
+  });
+  srv.on('connection', (s) => sockets.push(s));
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+  const { port } = srv.address() as AddressInfo;
+  try {
+    const started = Date.now();
+    await assert.rejects(
+      provider(`http://127.0.0.1:${port}/v1`).chat({ maxTokens: 10, messages: [{ role: 'user', content: 'hi' }] }),
+      /tiempo de espera agotado/,
+    );
+    // 400ms timeout × 3 withRetry attempts + 1s and 3s backoff ≈ 5.2s ceiling.
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 12_000, `should not hang; took ${elapsed}ms`);
+  } finally {
+    for (const s of sockets) s.destroy();
+    srv.close();
+  }
+});
+
+// ---- context budgeting ----
+
+test('clampItem truncates an oversized body and says that it did', () => {
+  const blob = 'A'.repeat(40_000); // the real DB has a 39,748-char base64 body
+  const out = clampItem(blob);
+  assert.ok(out.length < 2_100, `expected a bounded result, got ${out.length}`);
+  assert.match(out, /recortado: 40000 caracteres/);
+});
+
+test('clampItem leaves normal messages completely untouched', () => {
+  for (const s of ['', 'hola', 'Necesito cotización de toallas', '需要报价', 'x'.repeat(MAX_ITEM_CHARS)]) {
+    assert.equal(clampItem(s), s);
+  }
+});
+
+test('clampBlockKeepingEnd keeps the most recent lines, not the oldest', () => {
+  const lines = Array.from({ length: 5_000 }, (_, i) => `line ${i}`);
+  const out = clampBlockKeepingEnd(lines.join('\n'), 1_000);
+  assert.ok(out.includes('line 4999'), 'the newest line must survive');
+  assert.ok(!out.includes('line 0\n'), 'the oldest lines are the ones dropped');
+  assert.match(out, /se omitieron \d+ caracteres más antiguos/);
+  assert.ok(out.length < 1_200);
+});
+
+test('clampBlockKeepingEnd leaves a block under budget alone', () => {
+  const small = 'a\nb\nc';
+  assert.equal(clampBlockKeepingEnd(small, 1_000), small);
 });

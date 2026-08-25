@@ -18,6 +18,14 @@ import {
   type AiToolCall,
 } from './types.js';
 
+/**
+ * No AI call may hang forever. fetch() has no default timeout, so a wedged
+ * provider connection — routine on a throttled link — would otherwise stall the
+ * nightly cron indefinitely and silently stop producing tasks. A timeout throws
+ * without an HTTP status, which withRetry() treats as transient and retries.
+ */
+const DEFAULT_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS ?? 120_000);
+
 interface OaiContentPart {
   type: 'text' | 'image_url';
   text?: string;
@@ -70,8 +78,12 @@ async function toOaiMessages(req: AiRequest, vision: boolean): Promise<OaiMessag
   const out: OaiMessage[] = [];
   let system = req.system ?? '';
   if (req.jsonSchema) {
+    // The literal word "json" MUST appear in the prompt: DeepSeek (and OpenAI
+    // itself) reject response_format:json_object otherwise. It happens to be
+    // present in this sentence — keep it that way deliberately, and see the
+    // matching assertion in tests/ai-layer.test.ts.
     system +=
-      `\n\nRespond ONLY with a single JSON object (no prose, no markdown fence) matching exactly this JSON schema:\n` +
+      `\n\nRespond ONLY with a single json object (no prose, no markdown fence) matching exactly this JSON schema:\n` +
       JSON.stringify(req.jsonSchema);
   }
   if (system) out.push({ role: 'system', content: system });
@@ -83,7 +95,11 @@ async function toOaiMessages(req: AiRequest, vision: boolean): Promise<OaiMessag
         content: typeof m.content === 'string' ? m.content : await toOaiParts(m.content, vision),
       });
     } else if (m.role === 'assistant') {
-      const msg: OaiMessage = { role: 'assistant', content: m.content || null };
+      // Empty string, not null: the OpenAI spec allows null content alongside
+      // tool_calls, but several OpenAI-*compatible* backends (Moonshot and some
+      // vLLM/Ollama builds among them) reject a null and 400 the whole request.
+      // '' is accepted everywhere, so it is the portable choice.
+      const msg: OaiMessage = { role: 'assistant', content: m.content || '' };
       if (m.toolCalls?.length) {
         msg.tool_calls = m.toolCalls.map((t) => ({
           id: t.id,
@@ -140,7 +156,22 @@ export class OpenAiCompatProvider implements AiChatProvider {
     if (this.opts.apiKey) headers.Authorization = `Bearer ${this.opts.apiKey}`;
 
     const data = await withRetry(async () => {
-      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+        });
+      } catch (err) {
+        if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+          throw new Error(
+            `${this.name} → sin respuesta tras ${Math.round(DEFAULT_TIMEOUT_MS / 1000)}s (tiempo de espera agotado).`,
+          );
+        }
+        throw err;
+      }
       if (!res.ok) {
         const errText = (await res.text().catch(() => '')).slice(0, 300);
         throw new AiHttpError(res.status, `${this.name} → HTTP ${res.status}: ${errText}`);

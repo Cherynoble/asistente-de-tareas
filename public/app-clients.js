@@ -6,6 +6,12 @@
 
 // ---- Clients / senders ----
 let sendersItems = [];
+/**
+ * Display label for a stored category value. The two built-ins are translated;
+ * anything the owner typed himself is shown exactly as he typed it.
+ */
+const categoryLabel = (c) => (c === 'Oficina' || c === 'Personal' ? tr(`category.${c}`) : c);
+
 let clientsFilter = 'all'; // 'all' | '__unclassified__' | a category name
 const clientsSel = makeSelection('clients', () => filteredSenders().map((s) => s.handle));
 function filteredSenders() {
@@ -20,8 +26,9 @@ function filteredSenders() {
 // Known categories = the two defaults plus any custom ones already in use.
 function knownCats() {
   const set = new Set(['Oficina', 'Personal']);
+  // Note: these two are stored VALUES, not display text — see categoryLabel().
   for (const s of sendersItems) if (s.category) set.add(s.category);
-  return [...set].sort((a, b) => a.localeCompare(b, 'es'));
+  return [...set].sort(i18nCompare);
 }
 function catCounts() {
   const c = { __all__: sendersItems.length, __unclassified__: 0 };
@@ -49,9 +56,9 @@ function renderClientChips() {
     };
     return b;
   };
-  box.append(chip('all', 'Todos', counts.__all__));
-  for (const cat of knownCats()) box.append(chip(cat, cat, counts[cat] || 0));
-  box.append(chip('__unclassified__', 'Sin clasificar', counts.__unclassified__));
+  box.append(chip('all', tr('clients.allFilter'), counts.__all__));
+  for (const cat of knownCats()) box.append(chip(cat, categoryLabel(cat), counts[cat] || 0));
+  box.append(chip('__unclassified__', tr('clients.unclassified'), counts.__unclassified__));
 }
 async function loadSenders() {
   sendersItems = await (await fetch('/api/senders')).json();
@@ -64,7 +71,7 @@ function renderSenders() {
   list.innerHTML = '';
   const items = filteredSenders();
   if (!items.length) {
-    list.append(el(`<div class="empty">${sendersItems.length ? ico('search', 'ico-xl') + 'Nada coincide con la búsqueda.' : ico('clients', 'ico-xl') + 'Aún no hay remitentes: primero importa algunos mensajes.'}</div>`));
+    list.append(el(`<div class="empty">${sendersItems.length ? ico('search', 'ico-xl') + esc(tr('common.noSearchMatch')) : ico('clients', 'ico-xl') + esc(tr('clients.empty'))}</div>`));
     clientsSel.refresh();
     return;
   }
@@ -74,26 +81,29 @@ function renderSenders() {
     const isId = /@/.test(s.handle) || /^\+?[\d][\d\s().-]*$/.test(s.handle);
     const resolved = s.displayName && s.displayName !== s.handle ? s.displayName : isId ? '' : s.handle;
     const cats = knownCats();
-    const catOpts = ['<option value="">Sin clasificar</option>']
-      .concat(cats.map((c) => `<option value="${esc(c)}" ${s.category === c ? 'selected' : ''}>${esc(c)}</option>`))
-      .concat('<option value="__new__">+ Nueva…</option>')
+    // The category VALUE stays as stored ('Oficina'/'Personal' or a custom
+    // one the owner typed); only the displayed label is translated, so
+    // switching language never rewrites the database.
+    const catOpts = [`<option value="">${esc(tr('clients.unclassified'))}</option>`]
+      .concat(cats.map((c) => `<option value="${esc(c)}" ${s.category === c ? 'selected' : ''}>${esc(categoryLabel(c))}</option>`))
+      .concat(`<option value="__new__">${esc(tr('clients.newCategory'))}</option>`)
       .join('');
     const card = el(`<div class="card sender">
       <input type="checkbox" class="sel" data-id="${esc(s.handle)}" />
       ${isId ? `<span class="handle">${esc(s.handle)}</span>` : ''}
-      ${resolved ? `<span class="rn">${esc(resolved)}</span>` : '<span class="rn unnamed">sin nombre</span>'}
-      <span class="count">${s.count ? s.count + ' msjs' : 'tarea'}</span>
-      <input class="nm" placeholder="${resolved ? 'cambiar nombre' : 'nombre'}" value="${esc(s.name || '')}" />
-      <input class="pn" placeholder="qué compran / necesitan" value="${esc(s.productNeed || '')}" />
-      <select class="cat" title="Categoría">${catOpts}</select>
-      <button class="approve save">Guardar</button>
+      ${resolved ? `<span class="rn">${esc(resolved)}</span>` : `<span class="rn unnamed">${esc(tr('clients.unnamed'))}</span>`}
+      <span class="count">${s.count ? tr('clients.msgCount', { n: s.count }) : tr('clients.fromTask')}</span>
+      <input class="nm" placeholder="${esc(resolved ? tr('clients.rename') : tr('clients.name'))}" value="${esc(s.name || '')}" />
+      <input class="pn" placeholder="${esc(tr('clients.productNeed'))}" value="${esc(s.productNeed || '')}" />
+      <select class="cat" title="${esc(tr('clients.category'))}">${catOpts}</select>
+      <button class="approve save">${esc(tr('common.save'))}</button>
       <span class="saved"></span>
     </div>`);
     clientsSel.bind(card.querySelector('.sel'), s.handle);
     card.querySelector('.cat').onchange = async (e) => {
       let val = e.target.value;
       if (val === '__new__') {
-        val = ((await askText('Nueva categoría (p. ej. Proveedor):')) || '').trim();
+        val = ((await askText(tr('clients.newCategoryPrompt'))) || '').trim();
         if (!val) { e.target.value = s.category || ''; return; }
       }
       await fetch('/api/clients/category', {
@@ -128,16 +138,16 @@ $('#clients-autoclass').onclick = async () => {
   const btn = $('#clients-autoclass');
   const st = $('#clients-autoclass-status');
   btn.disabled = true;
-  st.textContent = 'clasificando… (puede tardar)';
+  st.textContent = tr('clients.classifying');
   try {
     const r = await (await fetch('/api/clients/autoclassify', { method: 'POST' })).json();
     if (r.error) st.textContent = r.error;
     else {
-      st.textContent = `✓ ${r.classified} clasificados`;
+      st.textContent = `✓ ${tr('clients.classified', { n: r.classified })}`;
       await loadSenders();
     }
   } catch {
-    st.textContent = 'no se pudo clasificar';
+    st.textContent = tr('clients.classifyFailed');
   }
   btn.disabled = false;
 };

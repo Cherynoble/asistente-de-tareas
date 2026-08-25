@@ -9,6 +9,7 @@
 import { db } from '../db/index.js';
 import { getSetting } from '../settings.js';
 import { macNotify } from './mac.js';
+import { t, tn } from '../i18n.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -73,18 +74,24 @@ export function buildDigest(now = Date.now()): Digest {
 
   const counts = { total: tasks.length, todo: todo.length, waiting: waiting.length, overdue: overdue.length };
   if (tasks.length === 0) {
-    return { title: 'Todo al día 🎉', subtitle: 'Sin tareas abiertas', message: 'Nada pendiente — bien hecho.', counts, tasks };
+    return {
+      title: t('notify.allClearTitle'),
+      subtitle: t('notify.allClearSubtitle'),
+      message: t('notify.allClearMessage'),
+      counts,
+      tasks,
+    };
   }
-  const title = `${tasks.length} tarea${tasks.length === 1 ? '' : 's'} abierta${tasks.length === 1 ? '' : 's'}`;
+  const title = tn('notify.openTasks', tasks.length);
   const parts: string[] = [];
-  if (overdue.length) parts.push(`${overdue.length} vencida${overdue.length === 1 ? '' : 's'}`);
-  parts.push(`${todo.length} por hacer`, `${waiting.length} en espera`);
+  if (overdue.length) parts.push(tn('notify.overdue', overdue.length));
+  parts.push(t('notify.todo', { n: todo.length }), t('notify.waiting', { n: waiting.length }));
   const subtitle = parts.join(' · ');
   // Lead with the most pressing items (overdue first, else most urgent).
   const lead = (overdue.length ? overdue : tasks).slice(0, 3);
   const more = tasks.length - lead.length;
   const message =
-    lead.map((t) => t.title).join('; ') + (more > 0 ? ` +${more} más` : '');
+    lead.map((task) => task.title).join('; ') + (more > 0 ? t('notify.andMore', { n: more }) : '');
   return { title, subtitle, message, counts, tasks };
 }
 
@@ -92,7 +99,7 @@ export function buildDigest(now = Date.now()): Digest {
 export function sendDailyDigest(now = Date.now()): Digest {
   const d = buildDigest(now);
   if (remindersEnabled()) {
-    macNotify({ title: `Buenos días — ${d.title}`, subtitle: d.subtitle, message: d.message });
+    macNotify({ title: t('notify.goodMorning', { summary: d.title }), subtitle: d.subtitle, message: d.message });
   }
   return d;
 }
@@ -122,25 +129,22 @@ export function runNudgeSweep(now = Date.now(), opts: { force?: boolean } = {}):
   if (due.length === 0) return { nudged: 0, overdue: 0, tasks: [] };
 
   const overdue = due.filter((t) => isOverdue(t, now));
-  const lead = (overdue.length ? overdue : due).slice(0, 3).map((t) => t.title);
+  const lead = (overdue.length ? overdue : due).slice(0, 3).map((task) => task.title);
   const n = due.length;
   const more = n - lead.length;
 
   // Escalating wording: bare reminder → "still open" → "⚠️ overdue".
-  let title: string;
-  if (overdue.length) {
-    title = `⚠️ ${overdue.length} tarea${overdue.length === 1 ? '' : 's'} vencida${overdue.length === 1 ? '' : 's'}`;
-  } else {
-    title = `${n} tarea${n === 1 ? '' : 's'} aún pendiente${n === 1 ? '' : 's'}`;
-  }
-  const message = lead.join('; ') + (more > 0 ? ` +${more} más` : '');
-  macNotify({ title, subtitle: 'Abre la app para actualizarlas', message });
+  const title = overdue.length
+    ? tn('notify.overdueTitle', overdue.length)
+    : tn('notify.stillOpenTitle', n);
+  const message = lead.join('; ') + (more > 0 ? t('notify.andMore', { n: more }) : '');
+  macNotify({ title, subtitle: t('notify.openAppToUpdate'), message });
 
   const stmt = db().prepare('UPDATE tasks SET last_nudge_at = ? WHERE id = ?');
   const tx = db().transaction((ids: number[]) => {
     for (const id of ids) stmt.run(now, id);
   });
-  tx(due.map((t) => t.id));
+  tx(due.map((task) => task.id));
 
-  return { nudged: n, overdue: overdue.length, tasks: due.map((t) => ({ id: t.id, title: t.title })) };
+  return { nudged: n, overdue: overdue.length, tasks: due.map((task) => ({ id: task.id, title: task.title })) };
 }

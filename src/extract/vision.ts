@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { aiProvider, type AiPart } from '../ai/index.js';
+import { aiProvider, type AiPart, type AiRole } from '../ai/index.js';
+import { replyLanguageInstruction } from '../i18n.js';
 
 /** Image media types the APIs accept directly. */
 const NATIVE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
@@ -18,7 +19,18 @@ const MAX_IMAGE_BYTES = 7_000_000;
 /** Cap the long edge so even huge photos come in well under the size limit. */
 const MAX_LONG_EDGE = '2000';
 
-const PROMPT = `A client sent this to a trading-company owner. In one or two short lines: (1) say what it shows, and (2) if it implies something he should do — source a product, send a quote, follow up — state that task plainly. If it's not business-relevant, just say so. Reply in Spanish (neutral Latin-American Spanish); keep product and brand names as-is.`;
+/**
+ * Attachment description prompt. Instruction in English (portable across
+ * providers); the description itself comes back in the owner's language.
+ */
+function defaultPrompt(): string {
+  return (
+    `A client sent this to the owner of a trading company. In one or two short lines: ` +
+    `(1) say what it shows, and (2) if it implies something he should do — source a product, ` +
+    `send a quote, follow up — state that task plainly. If it is not business-relevant, just say so. ` +
+    `${replyLanguageInstruction()}`
+  );
+}
 
 function expandHome(p: string): string {
   return p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
@@ -75,12 +87,15 @@ function loadImage(filePath: string, mime: string): { data: string; mediaType: s
 export async function describeAttachment(
   filePath: string,
   mime: string,
-  opts: { prompt?: string; maxTokens?: number } = {},
+  opts: { prompt?: string; maxTokens?: number; role?: AiRole } = {},
 ): Promise<string> {
-  const prompt = opts.prompt ?? PROMPT;
+  const prompt = opts.prompt ?? defaultPrompt();
   const maxTokens = opts.maxTokens ?? 300;
   try {
-    const provider = aiProvider();
+    // Bulk by default (the nightly pass describes hundreds of attachments); the
+    // chat agent's "read this file" passes 'chat' because the owner is waiting
+    // on that answer and it needs the stronger model.
+    const provider = aiProvider(opts.role ?? 'bulk');
     let part: AiPart;
 
     if (mime === 'application/pdf') {

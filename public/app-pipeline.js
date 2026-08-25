@@ -16,7 +16,7 @@ function handleEvent(e) {
   if (e.type === 'message') {
     counters.msgs++;
     $('#msg-count').textContent = counters.msgs;
-    const who = e.direction === 'outgoing' ? 'yo →' : esc(prettySender(e.sender, e.senderName));
+    const who = e.direction === 'outgoing' ? esc(tr('common.me')) + ' →' : esc(prettySender(e.sender, e.senderName));
     // Inline thumbnails / PDF chips for any image or PDF attachment we have a file for.
     // Inline thumbnails / PDF chips. Broken images (e.g. WhatsApp media that
     // can't be fetched on demand) remove themselves via onerror.
@@ -33,7 +33,7 @@ function handleEvent(e) {
     const clip = atts && isMarker ? '' : `<div class="clip">${esc(e.body)}</div>`;
     const when = e.ts ? `<span class="mwhen">${esc(fmtMsgTime(e.ts))}</span>` : '';
     $('#msg-feed').append(el(`<div class="mrow ${e.direction === 'outgoing' ? 'out' : ''}">
-      <div class="who"><span>${sourceBadge(e.source)}${accountBadge(e.source, e.waAccount)} ${who}</span><span class="mmeta">${when}${e.hasAttachment ? `<span class="paperclip" title="tiene adjunto">${ico('clip')}</span>` : ''}</span></div>
+      <div class="who"><span>${sourceBadge(e.source)}${accountBadge(e.source, e.waAccount)} ${who}</span><span class="mmeta">${when}${e.hasAttachment ? `<span class="paperclip" title="${esc(tr('pipeline.hasAttachment'))}">${ico('clip')}</span>` : ''}</span></div>
       ${clip}${atts ? `<div class="matts">${atts}</div>` : ''}</div>`));
   } else if (e.type === 'vision') {
     counters.vis++;
@@ -43,7 +43,7 @@ function handleEvent(e) {
         ? `<div class="pdfbadge">PDF</div>`
         : `<img loading="lazy" src="/api/attachment?id=${e.messageId}&i=${e.attachmentIndex}" alt="" />`;
     $('#vis-feed').append(el(`<div class="vcard">${media}
-      <div class="vname">${esc(e.name || e.mime)} · msj #${e.messageId}</div>
+      <div class="vname">${esc(e.name || e.mime)} · ${esc(tr('pipeline.msgRef', { id: e.messageId }))}</div>
       <div class="vdesc">${esc(e.description)}</div></div>`));
   } else if (e.type === 'task') {
     counters.tasks++;
@@ -52,14 +52,14 @@ function handleEvent(e) {
       <div class="title">${esc(e.title)}</div>
       <div class="detail">${esc(e.detail)}</div>
       ${e.sourceQuote ? `<div class="quote">${ico('search')}<span>"${esc(e.sourceQuote)}"</span></div>` : ''}
-      <div class="who">${e.client ? 'cliente: ' + esc(displayName(e.client)) : ''}</div></div>`));
+      <div class="who">${e.client ? esc(tr('tasks.clientLabel', { who: displayName(e.client) })) : ''}</div></div>`));
   }
 }
 
 function startStream(url, statusEl, onDone) {
   resetFeeds();
   counters.msgs = counters.vis = counters.tasks = 0;
-  statusEl.textContent = 'iniciando…';
+  statusEl.textContent = tr('pipeline.starting');
   // Run completion is funneled through finish() so a normal end, a server error,
   // and a dropped connection all close the stream and refresh the views exactly
   // once — a mid-run drop no longer freezes the status text forever.
@@ -74,20 +74,20 @@ function startStream(url, statusEl, onDone) {
   };
   es.onmessage = (ev) => {
     const e = JSON.parse(ev.data);
-    if (e.type === 'start') statusEl.textContent = `leyendo ${e.total} mensajes${e.vision ? ', visión activada' : ''}…`;
-    else if (e.type === 'batch') statusEl.textContent = `procesados ${e.processed}/${e.total} · ${e.proposed} propuestas…`;
+    if (e.type === 'start') statusEl.textContent = tr(e.vision ? 'pipeline.readingVision' : 'pipeline.reading', { n: e.total });
+    else if (e.type === 'batch') statusEl.textContent = tr('pipeline.batch', { done: e.processed, total: e.total, proposed: e.proposed });
     else if (e.type === 'done') {
-      if (!counters.tasks) $('#task-feed').append(el('<div class="empty">No se encontraron tareas.</div>'));
+      if (!counters.tasks) $('#task-feed').append(el(`<div class="empty">${esc(tr('pipeline.noTasksFound'))}</div>`));
       // The engine processes the NEWEST messages first and is bounded per run —
       // tell the user when older imported history is still queued.
       const left = e.remaining > 0
-        ? ` · quedan ${e.remaining} mensajes antiguos en cola — pulsa de nuevo para continuar`
+        ? ` · ${tr('pipeline.remaining', { n: e.remaining })}`
         : '';
-      finish(`listo — ${e.proposed} tarea(s) propuesta(s)${left}`);
+      finish(tr('pipeline.finished', { n: e.proposed }) + left);
     } else handleEvent(e);
   };
   es.addEventListener('failed', (ev) => finish('error: ' + JSON.parse(ev.data).message));
-  es.onerror = () => finish('se interrumpió la conexión — vuelve a intentarlo');
+  es.onerror = () => finish(tr('pipeline.connectionLost'));
   return es;
 }
 
@@ -103,7 +103,7 @@ $('#process').addEventListener('click', () => {
 
 $('#backfill').addEventListener('click', async () => {
   const count = Number($('#backfill-count').value) || 2000;
-  $('#proc-status').textContent = `importando ${count} mensajes…`;
+  $('#proc-status').textContent = tr('pipeline.importing', { n: count });
   const r = await (
     await fetch('/api/backfill', {
       method: 'POST',
@@ -112,7 +112,7 @@ $('#backfill').addEventListener('click', async () => {
     })
   ).json();
   $('#proc-status').textContent = r.ok
-    ? `importados ${r.inserted} nuevos (BD ahora ${r.total}). Pulsa "Procesar mensajes nuevos".`
-    : `error: ${r.error}`;
+    ? tr('pipeline.imported', { n: r.inserted, total: r.total })
+    : tr('common.errorPrefix', { message: r.error });
   loadStats();
 });

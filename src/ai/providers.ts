@@ -9,12 +9,26 @@
 
 export interface ProviderPreset {
   id: string;
-  /** Display label (Spanish UI). */
+  /** Display label. */
   label: string;
   /** 'anthropic' uses the official SDK; 'openai' uses the generic adapter. */
   kind: 'anthropic' | 'openai';
+  /**
+   * Default endpoint. These are the MAINLAND-CHINA endpoints, because that is
+   * where the app is deployed — the international ones are separate hosts with
+   * separate accounts and, from the office, worse latency. `baseUrlAlt` carries
+   * the international host so Ajustes can offer it to anyone running elsewhere.
+   */
   baseUrl: string;
+  /** International endpoint, when the provider runs a separate one. */
+  baseUrlAlt?: string;
   defaultModel: string;
+  /**
+   * Cheaper model for BULK work (extraction over thousands of messages,
+   * classification, translation) as opposed to the interactive chat agent.
+   * Empty = use defaultModel for both.
+   */
+  defaultBulkModel?: string;
   /** Whether the default model accepts image input (user-overridable). */
   vision: boolean;
   /** Whether an API key is required ('' allowed for local servers). */
@@ -35,14 +49,29 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     keyHint: 'console.anthropic.com',
   },
   {
+    id: 'qwen',
+    label: 'Qwen (Alibaba / DashScope)',
+    kind: 'openai',
+    // DashScope runs on Alibaba Cloud inside mainland China, so AI traffic does
+    // not have to ride the same VPN the WhatsApp mirror needs.
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    baseUrlAlt: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+    defaultModel: 'qwen-max',
+    defaultBulkModel: 'qwen-plus',
+    vision: true,
+    needsKey: true,
+    keyHint: 'dashscope.console.aliyun.com',
+  },
+  {
     id: 'kimi',
     label: 'Kimi (Moonshot)',
     kind: 'openai',
-    baseUrl: 'https://api.moonshot.ai/v1',
-    defaultModel: 'kimi-k3',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    baseUrlAlt: 'https://api.moonshot.ai/v1',
+    defaultModel: 'kimi-k2-0711-preview',
     vision: true,
     needsKey: true,
-    keyHint: 'platform.moonshot.ai',
+    keyHint: 'platform.moonshot.cn',
   },
   {
     id: 'deepseek',
@@ -50,19 +79,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     kind: 'openai',
     baseUrl: 'https://api.deepseek.com/v1',
     defaultModel: 'deepseek-chat',
+    // No vision at all: product photos and scanned PDFs stop producing tasks.
     vision: false,
     needsKey: true,
     keyHint: 'platform.deepseek.com',
-  },
-  {
-    id: 'qwen',
-    label: 'Qwen (Alibaba)',
-    kind: 'openai',
-    baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
-    defaultModel: 'qwen-vl-max',
-    vision: true,
-    needsKey: true,
-    keyHint: 'dashscope.console.aliyun.com',
   },
   {
     id: 'glm',
@@ -70,6 +90,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     kind: 'openai',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     defaultModel: 'glm-4.6',
+    // GLM-4V is the vision-capable sibling; set it as the model if you need images.
     vision: false,
     needsKey: true,
     keyHint: 'open.bigmodel.cn',

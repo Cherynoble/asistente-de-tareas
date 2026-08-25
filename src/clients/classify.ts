@@ -43,7 +43,7 @@ export async function autoClassifyClients(limit = 200): Promise<{ classified: nu
     return { handle: r.handle, name: names[r.handle] || c?.name || '', productNeed: c?.pn || '', samples };
   });
 
-  const provider = aiProvider();
+  const provider = aiProvider('bulk'); // thousands of contacts — use the cheap tier
   const upsert = d.prepare(
     `INSERT INTO clients (handle, name, category, created_at, updated_at)
      VALUES (@handle, @name, @cat, @now, @now)
@@ -63,12 +63,16 @@ export async function autoClassifyClients(limit = 200): Promise<{ classified: nu
         return `${j + 1}. nombre="${c.name}" compra="${c.productNeed}" mensajes=[${s}]`;
       })
       .join('\n');
+    // English instruction, machine-readable output. The two category VALUES are
+    // fixed identifiers stored in the database — they are deliberately not
+    // translated, and the UI localises them at render time.
     const prompt =
-      `Eres el asistente de una empresa comercial (trading). Clasifica cada contacto como ` +
-      `"Oficina" (cliente, proveedor, fábrica o cualquier asunto de trabajo/negocio) o ` +
-      `"Personal" (familia, amigos, asuntos personales). Si no hay señal clara, usa "Oficina". ` +
-      `Devuelve SOLO un arreglo JSON, sin texto extra: [{"i":1,"cat":"Oficina"},{"i":2,"cat":"Personal"}].\n\n` +
-      `Contactos:\n${list}`;
+      `You are the assistant of a trading company. Classify each contact as ` +
+      `"Oficina" (a client, supplier, factory, or anything work/business related) or ` +
+      `"Personal" (family, friends, personal matters). If there is no clear signal, use "Oficina".\n` +
+      `Reply with a single json array and nothing else — no prose, no markdown fence — ` +
+      `exactly in this form: [{"i":1,"cat":"Oficina"},{"i":2,"cat":"Personal"}]\n\n` +
+      `Contacts:\n${list}`;
     try {
       const resp = await provider.chat({
         maxTokens: 600,

@@ -6,6 +6,7 @@
  */
 import { db } from '../db/index.js';
 import { aiJson, hasAiKey } from '../ai/index.js';
+import { getLocale, languageName, isLocale, type Locale } from '../i18n.js';
 
 interface Row {
   id: number;
@@ -34,13 +35,34 @@ const SCHEMA = {
   additionalProperties: false,
 } as const;
 
-const SYSTEM = `Translate each task's title and detail to neutral Latin-American Spanish. Keep product names, brand names, and proper names as-is. Return EVERY task by its exact id. If a task is already in Spanish, return it unchanged.`;
+/**
+ * Translate stored task titles/details into a target language.
+ *
+ * This stays an EXPLICIT, opt-in migration rather than something a language
+ * switch triggers automatically. Re-translating the same column is lossy and
+ * degrades if run repeatedly, and a UI preference should not silently rewrite
+ * the owner's data — especially when the office may switch languages back and
+ * forth. source_quote is never touched: it is a verbatim search string.
+ */
+function systemPrompt(target: Locale): string {
+  return (
+    `Translate each task's title and detail into ${languageName(target)}. ` +
+    `Keep product names, brand names, and proper names exactly as they are. ` +
+    `Return EVERY task by its exact id. If a task is already in that language, return it unchanged. ` +
+    `Respond with a single json object and nothing else.`
+  );
+}
 
 async function main(): Promise<void> {
   if (!hasAiKey()) {
     console.error('No AI provider configured (Ajustes, or ANTHROPIC_API_KEY in .env).');
     process.exit(1);
   }
+  // `npm run translate:tasks [es|en|zh]` — defaults to the current UI language.
+  const arg = process.argv[2];
+  const target: Locale = isLocale(arg) ? arg : getLocale();
+  console.log(`Translating tasks to ${languageName(target)}…`);
+
   const rows = db()
     .prepare(`SELECT id, title, detail FROM tasks WHERE archived_at IS NULL`)
     .all() as Row[];
@@ -58,7 +80,7 @@ async function main(): Promise<void> {
     const input = batch.map((r) => `#${r.id} | ${r.title} | ${r.detail}`).join('\n');
     const parsed = await aiJson<{ tasks?: Row[] }>(
       {
-        system: SYSTEM,
+        system: systemPrompt(target),
         maxTokens: 4000,
         messages: [
           { role: 'user', content: `Translate these tasks. Each line is "#id | title | detail":\n\n${input}` },
@@ -74,7 +96,7 @@ async function main(): Promise<void> {
     done += (parsed.tasks ?? []).length;
     console.log(`  translated ${done}/${rows.length}…`);
   }
-  console.log(`Done — translated ${done} tasks to Spanish.`);
+  console.log(`Done — translated ${done} tasks to ${languageName(target)}.`);
   process.exit(0);
 }
 

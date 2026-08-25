@@ -19,3 +19,6 @@ dist/
 
 # Machine-local Claude Code settings
 .claude/settings.local.json
+
+# Generated source dump — large, regenerable, no review value in git
+codebase-flat.md

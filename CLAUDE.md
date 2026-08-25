@@ -9,6 +9,107 @@ AI to propose tasks, tracks their progress, and sends reminders until they're do
 
 Single user: the father. He reviews/uses it on his Mac.
 
+## 🔖 CHINA ROLLOUT (2026-08-24, unreleased) — read this before the AI/i18n code
+The office is in **mainland China**, on **several Macs, each with its own accounts,
+chats and database** (independent installs — no shared task list, so the server stays
+loopback-only and no auth work was needed). WhatsApp reaches the office over the
+office VPN. **Anthropic is off the table in production**: China is not a supported
+region, so reaching it over that VPN risks the account. The Chinese-provider switch is
+therefore mandatory, not experimental.
+
+- **Signing + notarization (implemented, NOT yet run — needs the $99 account).**
+  `npm run dist:signed` → `scripts/sign-and-notarize.mjs`: Developer ID preflight →
+  build → electron-rebuild → electron-builder with hardened runtime + entitlements →
+  `codesign --verify` → `notarytool submit --wait` → `stapler staple` → `spctl`.
+  Buy the **individual** account (an organization needs a D-U-N-S number). Preflight
+  fails in 0.2 s with instructions when no cert is present, before wasting a build.
+  `npm run sign:adhoc` is now `scripts/sign-adhoc.mjs` — the same INSIDE-OUT pass with
+  the same entitlements (Apple deprecated `--deep`, which signs outside-in), so dev
+  builds rehearse production. Validated: built the .app, ad-hoc signed it with
+  hardened runtime (`flags=0x10002(adhoc,runtime)`), verified, launched it isolated
+  (`HOME`/`DATA_DIR` overridden so the real WhatsApp session was untouched), and
+  `/api/stats` returned 200 — i.e. **better-sqlite3 loads under hardened runtime**.
+  - `build/entitlements.mac.plist` is deliberately minimal: allow-jit,
+    allow-unsigned-executable-memory, allow-dyld-environment-variables,
+    disable-library-validation. **NO app-sandbox** (needs chat.db + Chrome) and **no
+    apple-events** — notifications now go through Electron's `Notification`
+    (`src/notify/mac.ts`), which also fixes the old "banners attributed to the script
+    host" item. osascript remains as the dev-server fallback.
+  - ⚠️ **CLAUDE.md previously said pdfjs-dist is "pure JS (no native module)". That is
+    wrong.** It pulls `@napi-rs/canvas` → a **26 MB `skia.darwin-arm64.node`**, and it
+    IS loaded at runtime during PDF text extraction (verified via `process.report`).
+    It is N-API, so it needs no electron-rebuild, but it must be signed — hence
+    `disable-library-validation`, since it ships ad-hoc "linker-signed".
+  - **FDA must be re-granted after re-signing** (TCC keys on the signing identity, and
+    the entry can still *look* enabled while access is denied): remove with `−`, re-add.
+  - **`xattr -cr` becomes obsolete** once notarized+stapled — see "Install" below.
+  - **Gatekeeper behind the GFW:** notarization happens on the dev Mac. `stapler
+    staple` embeds the ticket so the user's Mac validates **offline**; Apple's services
+    are also reachable in mainland China, and Gatekeeper soft-fails when offline.
+- **Updater hardening (GitHub stays; the bugs were real).** `electron/updater.cjs` had
+  **no timeout on any fetch** — a throttled/blackholed connection left "Buscar
+  actualizaciones" spinning forever. Now bounded (20 s metadata / 10 min download) with
+  a legible message. New **`electron/update-core.cjs`** holds the security-critical
+  logic (version compare, URL allow-list, sha256 `verifyBundle`) with no `electron`
+  import, so `tests/updater.test.ts` can cover it. `applyUpdate()` now **re-derives the
+  zip URL and hash from the release manifest instead of trusting the renderer's copy**
+  (it is IPC-reachable), and **refuses any release without a valid sha256** —
+  `scripts/release.mjs` publishes one in the asset manifest. ⚠️ `electron/` is NOT in
+  the online-update payload, so these fixes need a fresh `.app`.
+- **AI layer (Part 2).** `runTurn` was already clean of direct Anthropic calls
+  (verified by grep). Hardened for the OpenAI dialect: **fetch timeout**
+  (`AI_TIMEOUT_MS`, default 120 s — a wedged call used to hang the nightly cron
+  forever), assistant tool-call messages send `content: ''` **not `null`** (several
+  OpenAI-compatible backends 400 on null), and the `json_object` mode keeps the literal
+  word "json" in the prompt on purpose (DeepSeek requires it).
+  - **Context math, measured not guessed:** the whole chat context block is ~8.1 k
+    chars (~2–3.7 k tokens) and an extractor batch ~8.2 k. Length is NOT the risk — a
+    **single unbounded body** is: real row `id=21073` holds a **39,748-char base64
+    JPEG**. `src/ai/budget.ts` caps per item (2 k) then per block (24 k), cutting the
+    worst case 18,610 → 1,466 tokens (**92 %**). Character budgets, because CJK packs
+    more tokens per character.
+  - **Two model roles** (`AiRole`): `'bulk'` (extraction/vision/classify/translate —
+    thousands of messages) vs `'chat'` (the tool-using agent). Per-provider override
+    `ai_model_bulk:<id>`; Qwen defaults to qwen-plus/qwen-max.
+  - Presets now point at **mainland** endpoints (`api.moonshot.cn`,
+    `dashscope.aliyuncs.com`) with `baseUrlAlt` for the international ones. Fresh
+    installs default to **qwen**; an install that already has an Anthropic key keeps
+    using Anthropic until switched (`defaultProviderId()`).
+- **Prompt portability (Part 3).** All 11 prompts are English-instruction +
+  locale-parameterized output (`replyLanguageInstruction()`), tool descriptions moved
+  to English (what function-calling training data looks like). The extractor's fragile
+  parts are now enforced in code, not asked for: **`validateProposals()`** drops
+  invented `source_msg_id`s and **repairs a `source_quote` that does not literally
+  occur in its message** (small models translate quotes, which silently breaks the
+  paste-into-WhatsApp-search feature). 12 tests in `tests/extraction-guard.test.ts`.
+- **Trilingual UI (Part 4) — es / en / zh.** One catalog per locale in
+  `public/i18n/*.json` (**413 keys**, identical key sets), served to the browser by
+  `src/server/routes/i18n.ts` as `/i18n/catalog.js` so the CLASSIC `app-*.js` scripts
+  can call it synchronously; the server reads the same files. **The global is `tr()`,
+  not `t()`** — `t` is the loop variable for a task in ~50 places and would be shadowed
+  at runtime. Markup carries `data-i18n` / `-placeholder` / `-title` / `-aria-label`,
+  plus **`data-i18n-html`** for prose that wraps inline `<b>` (splitting those into
+  fragments produced word salad). Long-form Help is a per-locale HTML fragment
+  (`public/i18n/help.<locale>.html`). Dates/collation go through Intl; the date picker
+  derives month names and the **first day of the week** from Intl (Monday in es/zh,
+  Sunday in en). Language picker in Ajustes + a **first-run picker** (endonyms, never
+  translated) that blocks boot so the digest can't stack on top of it.
+  - **`SEL_OPEN`/`SEL_CLOSE`: frozen, dual-read.** New messages write the neutral
+    `⟦SELECTION⟧`; readers accept the legacy Spanish `⟦SELECCIÓN⟧` **forever**, since it
+    is already inside stored `chat_messages` rows. No migration, no risk.
+    (`tests/sentinel.test.ts` runs the real shipped frontend parser.)
+  - **Stored task titles are NOT re-translated on a language switch** — deliberate: it
+    is lossy, irreversible over the same column, and a UI preference must not rewrite
+    his data. `npm run translate:tasks [es|en|zh]` stays the explicit opt-in.
+  - Verified in-browser at 1280×720 in all three: **0 UI-label clipping, 0 horizontal
+    page overflow**, identical by-design truncation of filenames/previews; CJK prose
+    wraps cleanly (`-apple-system` → PingFang SC). FTS5 CJK search re-verified on the
+    real DB (`你好` → 2 hits).
+- **Status / still open:** signing+notarization is written but unrun (needs the Apple
+  account); **live provider validation and the extraction A/B are NOT done — they need
+  a real Qwen/Kimi key.** Everything else is `npm run typecheck` + `npm test` (77) +
+  `npm run smoke` green.
+
 ## 🔖 NEW PHASE (2026-06-26) — version control + new features — read this first
 We moved past "feature-complete" into adding features, with proper infra:
 - **Git + GitHub:** repo at https://github.com/Cherynoble/asistente-de-tareas (public,
@@ -49,7 +150,7 @@ We moved past "feature-complete" into adding features, with proper infra:
   only the *first* attachment per message, and the nightly cron's vision cap of 20 covered up
   to 6,000 messages — undescribed files were lost for good, since the row is marked processed
   regardless.
-- **Current version 1.8.0** (shell still 0.1.x; all updates ship online via GitHub Releases,
+- **Current version 1.8.0** (the China-rollout work above is on top of this, unreleased) (shell still 0.1.x; all updates ship online via GitHub Releases,
   minShellVersion 0.1.0 since no new deps). Bump version + `MIN_SHELL_VERSION=0.1.0 npm run
   release -- "notas"` to publish; Dad clicks "Buscar actualizaciones".
 - **Multi-provider AI layer (2026-08-24, unreleased/experimental)** — `src/ai/` is now the
@@ -62,7 +163,7 @@ We moved past "feature-complete" into adding features, with proper infra:
   `ModelExtractor` —, vision, chat agent + tools, classify, translate) go through it; the
   `getApiKey()` route gates became `hasAiKey()`. Ajustes → "Proveedor de IA" has the
   provider picker + **Probar conexión** (`GET/POST /api/ai`, `POST /api/ai/test`). PDFs on
-  non-Anthropic providers are locally text-extracted via **pdfjs-dist** (pure JS; NEW DEP →
+  non-Anthropic providers are locally text-extracted via **pdfjs-dist** (NOT pure JS — it pulls the native @napi-rs/canvas; NEW DEP →
   the next shipped release that relies on it needs a fresh `.app` / MIN_SHELL_VERSION bump,
   though the code degrades gracefully if the package is missing). Status: experiment phase —
   Anthropic stays the default; validate extraction quality (Mensajes → Analizar is the A/B
@@ -227,7 +328,10 @@ change between test and prod — only which account/chat it reads.
     `Identifier=com.dadsapp.asistente`, sealed resources, "satisfies its Designated
     Requirement"). After this it's the NORMAL unsigned-app flow ("could not verify"),
     which IS openable. (True notarization still needs an Apple Dev account.)
-  - **Install on the father's Mac**: copy the `.app` to /Applications (or anywhere)
+  - **Install on the father's Mac** — ⚠️ this describes the UNSIGNED flow and is
+    superseded once `npm run dist:signed` is used (a notarized + stapled app just
+    double-click opens, with no quarantine step at all; see the China-rollout section):
+    copy the `.app` to /Applications (or anywhere)
     → **clear the AirDrop quarantine**: Terminal `xattr -cr "/path/Asistente de
     Tareas.app"` (one command; then it just double-click opens). *Without* clearing,
     the fallback is double-click → "could not verify" → System Settings → Privacy &

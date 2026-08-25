@@ -3,7 +3,7 @@ import express from 'express';
 import { db } from '../../db/index.js';
 import { autoClassifyClients } from '../../clients/classify.js';
 import { nameMap, invalidateNameCache } from '../../names.js';
-import { AI_NOT_CONFIGURED, hasAiKey } from '../../ai/index.js';
+import { aiNotConfigured, hasAiKey } from '../../ai/index.js';
 import { includedChats } from '../helpers.js';
 
 export const clientsRouter = express.Router();
@@ -168,7 +168,7 @@ r.post('/api/clients/category', (req, res) => {
 /** Auto-tag still-unclassified clients as Personal/Oficina with a quick AI pass. */
 r.post('/api/clients/autoclassify', async (_req, res) => {
   if (!hasAiKey()) {
-    res.status(400).json({ error: AI_NOT_CONFIGURED });
+    res.status(400).json({ error: aiNotConfigured });
     return;
   }
   try {

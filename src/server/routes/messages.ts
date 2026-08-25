@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import express from 'express';
 import { db } from '../../db/index.js';
 import { config } from '../../config.js';
-import { AI_NOT_CONFIGURED, hasAiKey } from '../../ai/index.js';
+import { aiNotConfigured, hasAiKey } from '../../ai/index.js';
 import { splitAtt } from '../../attachments.js';
 import { createThread } from '../../chat/store.js';
 import {
@@ -279,7 +279,7 @@ r.get('/api/messages/locate', (req, res) => {
  */
 r.post('/api/messages/reanalyze', async (req, res) => {
   if (!hasAiKey()) {
-    res.status(400).json({ error: AI_NOT_CONFIGURED });
+    res.status(400).json({ error: aiNotConfigured });
     return;
   }
   const b = (req.body as { ids?: unknown; vision?: boolean }) ?? {};
@@ -339,7 +339,7 @@ r.post('/api/backfill', (req, res) => {
  */
 r.get('/api/process/stream', async (req, res) => {
   if (!hasAiKey()) {
-    res.status(400).json({ error: AI_NOT_CONFIGURED });
+    res.status(400).json({ error: aiNotConfigured });
     return;
   }
   res.setHeader('Content-Type', 'text/event-stream');
