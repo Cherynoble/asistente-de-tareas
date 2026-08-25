@@ -159,6 +159,40 @@ function fillAiFields(providerId) {
   $('#ai-model-vision').value = p.visionModel || '';
   $('#ai-baseurl').value = p.baseUrl || '';
   $('#ai-baseurl-row').style.display = p.id === 'anthropic' ? 'none' : '';
+
+  /*
+   * Providers that run separate regional endpoints (DashScope: mainland vs
+   * Singapore) get a one-click swap. This is not cosmetic — the two are
+   * SEPARATE ACCOUNTS with non-interchangeable API keys, and typing the wrong
+   * host produces an auth error that looks like a bad key rather than a wrong
+   * region. Showing both, with the warning, is what stops that hour of
+   * debugging.
+   */
+  const altBtn = $('#ai-baseurl-alt');
+  const cur = ($('#ai-baseurl').value || '').trim();
+  const alt = (p.baseUrlAlt || '').trim();
+  if (alt && cur && alt !== cur) {
+    // "-intl" is DashScope's international host; anything else is the local one.
+    altBtn.textContent = /-intl\./.test(alt)
+      ? tr('settings.useIntlEndpoint')
+      : tr('settings.useMainlandEndpoint');
+    altBtn.hidden = false;
+    $('#ai-region-note').hidden = false;
+    altBtn.onclick = (e) => {
+      e.preventDefault();
+      // Swap the two hosts and re-render, so the button toggles back and forth
+      // rather than being a one-way door. Mutating the cached entry is enough:
+      // fillAiFields reads from it, and a real save refreshes the cache.
+      const swap = $('#ai-baseurl').value.trim();
+      p.baseUrl = alt;
+      p.baseUrlAlt = swap;
+      fillAiFields(p.id);
+    };
+  } else {
+    altBtn.hidden = true;
+    altBtn.onclick = null;
+    $('#ai-region-note').hidden = true;
+  }
   $('#ai-vision').checked = !!p.vision;
   $('#api-key').value = '';
   $('#api-key').placeholder = p.hasKey

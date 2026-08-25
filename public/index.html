@@ -426,7 +426,9 @@
           <p class="hint" data-i18n="settings.modelosPorRolHint">El modelo principal responde en el Chat. El económico analiza miles de mensajes (más barato). El de visión lee imágenes — en la mayoría de proveedores el modelo de texto más potente no puede ver imágenes.</p>
           <div class="setrow" id="ai-baseurl-row">
             <label data-i18n="settings.urlBase">URL base <input id="ai-baseurl" type="text" placeholder="https://…/v1" style="width: 22em" autocomplete="off" data-i18n-placeholder="settings.httpsV1"/></label>
+            <button id="ai-baseurl-alt" class="small" hidden></button>
           </div>
+          <p class="hint" id="ai-region-note" data-i18n="settings.endpointKeyWarning" hidden></p>
           <div class="setrow">
             <input id="api-key" type="password" placeholder="clave de API" autocomplete="off" data-i18n-placeholder="settings.claveDeApi"/>
             <button id="save-key" class="primary" data-i18n="settings.guardar">Guardar</button>
