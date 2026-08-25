@@ -135,7 +135,7 @@ const PORT = Number(process.env.PORT ?? 4319);
 // the LAN. Set HOST explicitly (e.g. 0.0.0.0) only if remote access is ever
 // wanted on purpose — and add auth first.
 const HOST = process.env.HOST ?? '127.0.0.1';
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`\n  Dad's App dashboard → http://localhost:${PORT}\n`);
   logStartupDiagnostics(); // which DB this process bound to — see Ajustes → Diagnóstico
   try {
@@ -151,4 +151,23 @@ app.listen(PORT, HOST, () => {
     console.log('  WhatsApp session(s) found — reconnecting…');
     startAllSessions();
   }
+});
+
+// A bind failure is fatal, and it must NOT fall through to the uncaughtException
+// net above: that net exists to keep an always-on app serving, but here there is
+// nothing to serve. Swallowing it leaves a zombie that never listens yet has
+// already opened WhatsApp's Chrome — which looks exactly like "the dashboard is
+// running but shows stale code", because the browser is really talking to the
+// OTHER process that owns the port (typically the packaged .app).
+server.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(
+      `\n  ✗ Port ${PORT} is already in use — something else owns it (usually the packaged\n` +
+        `    "Asistente de Tareas" app, which runs this same server in-process).\n\n` +
+        `    Quit that app first, or start on another port:  PORT=4320 npm run dashboard\n`,
+    );
+  } else {
+    console.error(`\n  ✗ Could not start the server on ${HOST}:${PORT} — ${err.message}\n`);
+  }
+  void stopAllAccounts().finally(() => process.exit(1));
 });

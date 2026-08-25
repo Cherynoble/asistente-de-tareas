@@ -1,10 +1,12 @@
 /**
  * Local PDF → text extraction, for providers that (unlike Anthropic) can't read
- * an inline PDF. Uses pdfjs-dist, which is pure JS (no native module — safe for
- * the Electron ABI setup), loaded lazily so the app boots fine even where the
+ * an inline PDF. Uses pdfjs-dist — which is NOT pure JS: it pulls @napi-rs/canvas,
+ * a ~26 MB native skia .node that IS loaded during extraction. It is N-API, so it
+ * needs no electron-rebuild, but it must be signed (hence disable-library-validation
+ * in the entitlements). Loaded lazily so the app boots fine even where the
  * dependency isn't installed (an online-updated install whose bundled
- * node_modules predate it) — extraction then degrades to a clear message
- * instead of crashing.
+ * node_modules predate it — node_modules is never in the update payload) —
+ * extraction then degrades to a clear message instead of crashing.
  *
  * Text-based PDFs (cotizaciones, facturas, listas) extract well. Scanned
  * image-only PDFs yield no text; callers surface that instead of guessing.
